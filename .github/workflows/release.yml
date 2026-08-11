@@ -1,0 +1,27 @@
+name: Build and Release Alpha Gym
+
+on:
+  push:
+    tags:
+      - 'v*' # Run only when a tag like v1.0.1 is pushed
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v3
+
+      - name: Install Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: 18
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Build and Publish with Electron Builder
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx vite build && npx electron-builder --publish always

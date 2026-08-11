@@ -1,0 +1,86 @@
+/* ============================================================
+   Alpha Gym Management System — Global Styles
+   Midnight Kinetic / Neon Volt Theme
+   ============================================================ */
+
+/* Inter font from Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&display=swap');
+
+/* Tailwind CSS v4 */
+@import "tailwindcss";
+
+@theme {
+  --color-brand-bg: #0B0E14;
+  --color-brand-panel: #121721;
+  --color-brand-surface: #181E2A;
+  --color-brand-accent: #CCFF00;
+  --color-brand-secondary: #8B5CF6;
+  --color-brand-success: #CCFF00;
+  --color-brand-info: #06B6D4;
+  --color-brand-danger: #EF4444;
+  
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+}
+
+/* ---- Base layer overrides ---- */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-[#0B0E14] text-slate-100;
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Custom scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #0B0E14;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #181E2A;
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #222B3D;
+  }
+
+  /* Text selection color */
+  ::selection {
+    background-color: rgba(204, 255, 0, 0.3);
+    color: #fff;
+  }
+
+  /* Focus ring — accessible, branded */
+  :focus-visible {
+    outline: 2px solid #CCFF00;
+    outline-offset: 2px;
+  }
+}
+
+/* ---- Component layer utilities ---- */
+@layer components {
+  /* Reusable card base */
+  .card {
+    @apply bg-[#121721] border border-[#222B3D] rounded-2xl;
+  }
+}

@@ -1,0 +1,44 @@
+{
+  "name": "alpha-gym",
+  "version": "1.0.1",
+  "description": "Alpha Gym - Management System",
+  "main": "electron/main.js",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n VITE,ELECTRON -c cyan,yellow \"vite\" \"wait-on http://localhost:5173 && electron .\"",
+    "build": "vite build && electron-builder",
+    "postinstall": "electron-builder install-app-deps",
+    "test:serve-update": "node scripts/serve-update.js"
+  },
+  "build": {
+    "extends": "./electron-builder.yml"
+  },
+  "keywords": [],
+  "author": "Alpha Gym",
+  "license": "MIT",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "better-sqlite3": "^13.0.3",
+    "electron-updater": "^6.8.9",
+    "lucide-react": "^1.30.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.2",
+    "recharts": "^3.10.1",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^6.0.5",
+    "autoprefixer": "^10.5.4",
+    "concurrently": "^10.0.4",
+    "electron": "^43.3.0",
+    "electron-builder": "^26.15.3",
+    "postcss": "^8.5.26",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.2.1",
+    "wait-on": "^9.1.0"
+  }
+}

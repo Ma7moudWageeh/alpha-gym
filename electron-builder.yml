@@ -1,0 +1,38 @@
+appId: com.alphagym.management
+productName: Alpha Gym
+copyright: Copyright © 2026 Alpha Gym
+
+# Output directory for distributable artifacts
+directories:
+  output: dist/installers
+
+# Files to include in the app package
+files:
+  - "electron/**/*"
+  - "dist/**/*"
+  - "bill/**/*"
+  - "package.json"
+
+# Enable ASAR packaging
+asar: false
+
+# Windows-specific configuration
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: src/assets/logo.png
+
+# NSIS installer configuration (Windows)
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Alpha Gym
+
+publish:
+  provider: github
+  owner: "Ma7moudWageeh"
+  repo: "alpha-gym"

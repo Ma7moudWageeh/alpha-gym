@@ -10,6 +10,7 @@ directories:
 files:
   - "electron/**/*"
   - "dist/**/*"
+  - "!dist/installers/**"
   - "bill/**/*"
   - "package.json"
 
@@ -18,16 +19,18 @@ asar: false
 
 # Windows-specific configuration
 win:
+  artifactName: Alpha-Gym-Setup-${version}.${ext}
   target:
     - target: nsis
       arch:
         - x64
-  icon: src/assets/logo.png
+  icon: src/assets/icon.ico
 
 # NSIS installer configuration (Windows)
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
+  differentialPackage: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Alpha Gym

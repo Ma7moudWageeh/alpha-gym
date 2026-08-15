@@ -1,6 +1,6 @@
 {
   "name": "alpha-gym",
-  "version": "1.0.1",
+  "version": "1.0.6",
   "description": "Alpha Gym - Management System",
   "main": "electron/main.js",
   "type": "module",
@@ -10,9 +10,6 @@
     "build": "vite build && electron-builder",
     "postinstall": "electron-builder install-app-deps",
     "test:serve-update": "node scripts/serve-update.js"
-  },
-  "build": {
-    "extends": "./electron-builder.yml"
   },
   "keywords": [],
   "author": "Alpha Gym",

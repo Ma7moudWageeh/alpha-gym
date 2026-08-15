@@ -134,6 +134,32 @@ function initSchema() {
     // Column might already exist, ignore
   }
 
+  // Migration: per-user security PIN for password recovery
+  try {
+    db.prepare('ALTER TABLE users ADD COLUMN security_pin TEXT').run();
+  } catch (e) {
+    // Column might already exist
+  }
+  try {
+    db.prepare(`
+      UPDATE users
+      SET security_pin = master_pin
+      WHERE security_pin IS NULL AND master_pin IS NOT NULL
+    `).run();
+  } catch (e) {
+    // Ignore migration errors
+  }
+
+  // Migration: dual-mode freeze fields on subscriptions
+  const freezeMigrations = [
+    'ALTER TABLE subscriptions ADD COLUMN freeze_reason TEXT',
+    "ALTER TABLE subscriptions ADD COLUMN freeze_mode TEXT",
+    'ALTER TABLE subscriptions ADD COLUMN freeze_end_date TEXT',
+  ];
+  for (const sql of freezeMigrations) {
+    try { db.prepare(sql).run(); } catch (e) { /* already exists */ }
+  }
+
   const pkgCount = db.prepare('SELECT COUNT(*) AS count FROM packages').get().count;
   if (pkgCount === 0) {
     const insertPkg = db.prepare('INSERT INTO packages (title, duration_days, default_price) VALUES (?, ?, ?)');
@@ -144,6 +170,50 @@ function initSchema() {
     });
     insertTransaction();
   }
+
+  // Sanitize any missing or empty client codes to enforce unique constraint safety
+  sanitizeClientCodes(db);
 }
 
-module.exports = { initSchema };
+function generateNextClientCode(dbInstance = db) {
+  const rows = dbInstance.prepare(`
+    SELECT client_code 
+    FROM clients 
+    WHERE client_code IS NOT NULL AND client_code != ''
+  `).all();
+
+  let maxNumber = 0;
+  for (const row of rows) {
+    const numbers = String(row.client_code).match(/\d+/g);
+    if (numbers) {
+      const parsed = parseInt(numbers[numbers.length - 1], 10);
+      if (!isNaN(parsed) && parsed > maxNumber) {
+        maxNumber = parsed;
+      }
+    }
+  }
+
+  let nextNum = maxNumber + 1;
+  let nextCode = `AG-${String(nextNum).padStart(4, '0')}`;
+
+  while (dbInstance.prepare('SELECT 1 FROM clients WHERE client_code = ?').get(nextCode)) {
+    nextNum++;
+    nextCode = `AG-${String(nextNum).padStart(4, '0')}`;
+  }
+
+  return nextCode;
+}
+
+function sanitizeClientCodes(dbInstance = db) {
+  try {
+    const emptyCodeRows = dbInstance.prepare("SELECT id FROM clients WHERE client_code = '' OR client_code IS NULL").all();
+    for (const row of emptyCodeRows) {
+      const freshCode = generateNextClientCode(dbInstance);
+      dbInstance.prepare('UPDATE clients SET client_code = ? WHERE id = ?').run(freshCode, row.id);
+    }
+  } catch (e) {
+    console.error('Error sanitizing client codes:', e);
+  }
+}
+
+module.exports = { initSchema, generateNextClientCode, sanitizeClientCodes };

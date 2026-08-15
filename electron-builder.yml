@@ -39,3 +39,4 @@ publish:
   provider: github
   owner: "Ma7moudWageeh"
   repo: "alpha-gym"
+  releaseType: release

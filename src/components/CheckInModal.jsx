@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Search, X, CheckCircle, AlertTriangle, Snowflake, HelpCircle, User } from 'lucide-react';
+import { formatDateDDMMYYYY } from '../utils/dateFormat';
 
 const CheckInModal = ({ isOpen, onClose }) => {
   const [query, setQuery] = useState('');
@@ -68,7 +69,7 @@ const CheckInModal = ({ isOpen, onClose }) => {
                   <p className="text-brand-success font-semibold tracking-wider text-lg">ACCESS GRANTED • ACTIVE</p>
                   <div className="text-slate-300 text-sm bg-[#0B0E14]/50 p-3 rounded border border-[#222B3D]">
                     <p>Package: <strong className="text-white">{result.subscription.package_title}</strong></p>
-                    <p>Expires: <strong className="text-white">{result.subscription.end_date}</strong></p>
+                    <p>Expires: <strong className="text-white">{formatDateDDMMYYYY(result.subscription.end_date)}</strong></p>
                   </div>
                 </div>
               )}
@@ -81,7 +82,7 @@ const CheckInModal = ({ isOpen, onClose }) => {
                   {result.subscription && (
                     <div className="text-slate-300 text-sm bg-[#0B0E14]/50 p-3 rounded border border-[#222B3D]">
                       <p>Last Package: <strong className="text-white">{result.subscription.package_title}</strong></p>
-                      <p>Expired on: <strong className="text-white">{result.subscription.end_date}</strong></p>
+                      <p>Expired on: <strong className="text-white">{formatDateDDMMYYYY(result.subscription.end_date)}</strong></p>
                     </div>
                   )}
                 </div>

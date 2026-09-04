@@ -75,9 +75,10 @@ function photoToDataUrl(storedPath) {
 /**
  * Profile-level status:
  * - frozen if any subscription is frozen
- * - active if any subscription is active with end_date >= today OR future start
- * - expired only if all subs are past end_date (and none frozen)
- * - null if no subscriptions
+ * - active if any subscription is active with end_date >= today
+ * - expired strictly if past end_date AND within last 30 days (days_since_expiry <= 30)
+ * - inactive if past end_date AND > 30 days
+ * - null/no_plan if no subscriptions
  */
 function computeClientStatus(clientId) {
   const today = new Date().toISOString().split('T')[0];
@@ -88,24 +89,30 @@ function computeClientStatus(clientId) {
   if (frozen) {
     return {
       sub_status: 'frozen',
+      computed_status: 'FROZEN',
       latest_end_date: frozen.end_date,
+      days_left: null,
       days_since_expiry: null,
       freeze_reason: frozen.freeze_reason || null,
     };
   }
 
   const active = db.prepare(`
-    SELECT id, end_date FROM subscriptions
+    SELECT id, end_date,
+      CAST(julianday(DATE(end_date)) - julianday(DATE(?)) AS INT) as days_left
+    FROM subscriptions
     WHERE client_id = ?
-      AND status = 'active'
+      AND (status = 'active' OR DATE(end_date) >= DATE(?))
       AND DATE(end_date) >= DATE(?)
     ORDER BY end_date DESC LIMIT 1
-  `).get(clientId, today);
+  `).get(today, clientId, today, today);
 
   if (active) {
     return {
       sub_status: 'active',
+      computed_status: 'ACTIVE',
       latest_end_date: active.end_date,
+      days_left: active.days_left,
       days_since_expiry: null,
       freeze_reason: null,
     };
@@ -113,24 +120,31 @@ function computeClientStatus(clientId) {
 
   const lastExpired = db.prepare(`
     SELECT id, end_date,
-      CAST(julianday(?) - julianday(end_date) AS INT) as days_since_expiry
+      CAST(julianday(DATE(?)) - julianday(DATE(end_date)) AS INT) as days_since_expiry,
+      CAST(julianday(DATE(end_date)) - julianday(DATE(?)) AS INT) as days_left
     FROM subscriptions
     WHERE client_id = ?
     ORDER BY end_date DESC LIMIT 1
-  `).get(today, clientId);
+  `).get(today, today, clientId);
 
   if (lastExpired) {
+    const daysSince = lastExpired.days_since_expiry !== null ? lastExpired.days_since_expiry : 0;
+    const isWithin30 = daysSince >= 0 && daysSince <= 30;
     return {
-      sub_status: 'expired',
+      sub_status: isWithin30 ? 'expired' : 'inactive',
+      computed_status: isWithin30 ? 'EXPIRED' : 'INACTIVE',
       latest_end_date: lastExpired.end_date,
-      days_since_expiry: lastExpired.days_since_expiry,
+      days_left: lastExpired.days_left,
+      days_since_expiry: daysSince,
       freeze_reason: null,
     };
   }
 
   return {
     sub_status: null,
+    computed_status: 'NO_PLAN',
     latest_end_date: null,
+    days_left: null,
     days_since_expiry: null,
     freeze_reason: null,
   };
@@ -154,10 +168,15 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
     const enriched = clients.map((c) => {
       const statusInfo = computeClientStatus(c.id);
       const photoUrl = photoToDataUrl(c.profile_photo);
+      const createdAt = c.registered_at || c.created_at || null;
       return {
         ...c,
+        created_at: createdAt,
+        registered_at: createdAt,
         sub_status: statusInfo.sub_status,
+        computed_status: statusInfo.computed_status,
         latest_end_date: statusInfo.latest_end_date,
+        days_left: statusInfo.days_left,
         days_since_expiry: statusInfo.days_since_expiry,
         freeze_reason: statusInfo.freeze_reason,
         profile_photo_url: photoUrl,
@@ -168,33 +187,20 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
     let filteredClients = enriched;
     if (status !== 'all') {
       filteredClients = enriched.filter((c) => {
-        if (status === 'active') return c.sub_status === 'active';
-        if (status === 'frozen') return c.sub_status === 'frozen';
-        if (status === 'expired') {
-          // Only expired within last 30 days (0 < days <= 30)
-          return (
-            c.sub_status === 'expired' &&
-            c.days_since_expiry !== null &&
-            c.days_since_expiry > 0 &&
-            c.days_since_expiry <= 30
-          );
-        }
+        if (status === 'active') return c.sub_status === 'active' || c.computed_status === 'ACTIVE';
+        if (status === 'frozen') return c.sub_status === 'frozen' || c.computed_status === 'FROZEN';
+        if (status === 'expired') return c.sub_status === 'expired' || c.computed_status === 'EXPIRED';
+        if (status === 'inactive') return c.sub_status === 'inactive' || c.computed_status === 'INACTIVE';
         return true;
       });
     }
 
     const totalCountRow = db.prepare('SELECT COUNT(*) as count FROM clients').get();
 
-    // Counts for KPI cards (expired uses 30-day window)
-    const activeCount = enriched.filter((c) => c.sub_status === 'active').length;
-    const frozenCount = enriched.filter((c) => c.sub_status === 'frozen').length;
-    const expiredCount = enriched.filter(
-      (c) =>
-        c.sub_status === 'expired' &&
-        c.days_since_expiry !== null &&
-        c.days_since_expiry > 0 &&
-        c.days_since_expiry <= 30
-    ).length;
+    // Counts for KPI cards — expired strictly within 30 days
+    const activeCount = enriched.filter((c) => c.sub_status === 'active' || c.computed_status === 'ACTIVE').length;
+    const frozenCount = enriched.filter((c) => c.sub_status === 'frozen' || c.computed_status === 'FROZEN').length;
+    const expiredCount = enriched.filter((c) => c.sub_status === 'expired' || c.computed_status === 'EXPIRED').length;
 
     return {
       success: true,
@@ -212,6 +218,39 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
   }
 });
 
+ipcMain.handle('clients:getStats', async () => {
+  db.syncAllSubscriptionStatuses(db);
+  try {
+    const clients = db.prepare('SELECT id FROM clients').all();
+    let active = 0;
+    let frozen = 0;
+    let expired = 0;
+
+    for (const c of clients) {
+      const statusInfo = computeClientStatus(c.id);
+      if (statusInfo.computed_status === 'ACTIVE') active++;
+      else if (statusInfo.computed_status === 'FROZEN') frozen++;
+      else if (statusInfo.computed_status === 'EXPIRED') expired++;
+    }
+
+    return {
+      success: true,
+      total: clients.length,
+      active,
+      frozen,
+      expired,
+      counts: {
+        all: clients.length,
+        active,
+        frozen,
+        expired,
+      }
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('clients:getById', async (event, { id }) => {
   db.syncAllSubscriptionStatuses(db);
   try {
@@ -223,8 +262,13 @@ ipcMain.handle('clients:getById', async (event, { id }) => {
 
     const statusInfo = computeClientStatus(id);
     client.client_status = statusInfo.sub_status;
+    client.sub_status = statusInfo.sub_status;
+    client.computed_status = statusInfo.computed_status;
     client.latest_end_date = statusInfo.latest_end_date;
     client.days_since_expiry = statusInfo.days_since_expiry;
+    client.days_left = statusInfo.days_left;
+    client.created_at = client.registered_at || client.created_at || null;
+    client.registered_at = client.created_at;
 
     // Prefer frozen, then active with valid end_date
     let activeSubscription = db.prepare(`
@@ -491,3 +535,46 @@ ipcMain.handle('clients:removePhoto', async (event, args) => {
     return { error: err.message };
   }
 });
+
+// Birthday query — returns all clients whose date_of_birth month+day matches today.
+// Uses Node-side filtering via isBirthdayToday logic to avoid timezone mismatches.
+ipcMain.handle('clients:getTodayBirthdays', async () => {
+  try {
+    const rows = db.prepare(`
+      SELECT id, client_code, name, phone, date_of_birth, profile_photo
+      FROM clients
+      WHERE date_of_birth IS NOT NULL AND date_of_birth != ''
+      ORDER BY name ASC
+    `).all();
+
+    const now = new Date();
+    const todayMonth = now.getMonth() + 1;
+    const todayDay   = now.getDate();
+
+    const birthdays = rows.filter((row) => {
+      try {
+        let normalized = String(row.date_of_birth).trim();
+        // Handle DD/MM/YYYY format
+        const ddmmyyyy = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (ddmmyyyy) {
+          normalized = `${ddmmyyyy[3]}-${ddmmyyyy[2].padStart(2, '0')}-${ddmmyyyy[1].padStart(2, '0')}`;
+        }
+        const parsed = new Date(normalized);
+        if (isNaN(parsed.getTime())) return false;
+        return (parsed.getMonth() + 1) === todayMonth && parsed.getDate() === todayDay;
+      } catch {
+        return false;
+      }
+    }).map((row) => ({
+      ...row,
+      client_id:   row.id,
+      client_name: row.name,
+      client_phone: row.phone,
+    }));
+
+    return { success: true, birthdays };
+  } catch (err) {
+    return { success: false, error: err.message, birthdays: [] };
+  }
+});
+

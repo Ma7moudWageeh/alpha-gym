@@ -97,7 +97,8 @@ app.whenReady().then(() => {
   require('./ipc/backup.ipc');
   require('./ipc/print.ipc');
   require('./ipc/updater.ipc');
-  require('./ipc/license.ipc');
+  require('./ipc/shell.ipc');
+  require('./ipc/settings.ipc');
 
   createWindow();
 

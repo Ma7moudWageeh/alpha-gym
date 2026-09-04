@@ -1,14 +1,27 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 // ============================================================
 // Alpha Gym — Preload Script
 // ============================================================
 contextBridge.exposeInMainWorld('electronAPI', {
+  // Shell — open whitelisted external URLs (wa.me, web.whatsapp.com)
+  openExternalUrl: (url) => ipcRenderer.invoke('shell:openExternal', url),
+
+  getPathForFile: (file) => {
+    try {
+      return webUtils && typeof webUtils.getPathForFile === 'function'
+        ? webUtils.getPathForFile(file)
+        : (file.path || '');
+    } catch (e) {
+      return file.path || '';
+    }
+  },
   auth: {
     checkOwnerExists: (args) => ipcRenderer.invoke('auth:checkOwnerExists', args),
     setupOwner: (args) => ipcRenderer.invoke('auth:setupOwner', args),
     login: (args) => ipcRenderer.invoke('auth:login', args),
     verifyPin: (args) => ipcRenderer.invoke('auth:verifyPin', args),
+    verifyCredentialsPin: (args) => ipcRenderer.invoke('auth:verifyCredentialsPin', args),
     resetPassword: (args) => ipcRenderer.invoke('auth:resetPassword', args),
     getUsers: (args) => ipcRenderer.invoke('auth:getUsers', args),
     createAdmin: (args) => ipcRenderer.invoke('auth:createAdmin', args),
@@ -20,9 +33,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     create: (args) => ipcRenderer.invoke('packages:create', args),
     update: (args) => ipcRenderer.invoke('packages:update', args),
     toggleActive: (args) => ipcRenderer.invoke('packages:toggleActive', args),
+    deletePackage: (id) => ipcRenderer.invoke('packages:delete', id),
+    delete: (id) => ipcRenderer.invoke('packages:delete', id),
   },
   clients: {
     getAll: (args) => ipcRenderer.invoke('clients:getAll', args),
+    getStats: (args) => ipcRenderer.invoke('clients:getStats', args),
     getById: (args) => ipcRenderer.invoke('clients:getById', args),
     getPayments: (args) => ipcRenderer.invoke('clients:getPayments', args),
     create: (args) => ipcRenderer.invoke('clients:create', args),
@@ -30,6 +46,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     delete: (args) => ipcRenderer.invoke('clients:delete', args),
     uploadPhoto: (args) => ipcRenderer.invoke('clients:uploadPhoto', args),
     removePhoto: (args) => ipcRenderer.invoke('clients:removePhoto', args),
+    deletePhoto: (clientId) => ipcRenderer.invoke('clients:deletePhoto', clientId),
+    getTodayBirthdays: () => ipcRenderer.invoke('clients:getTodayBirthdays'),
   },
   subscriptions: {
     create: (args) => ipcRenderer.invoke('subscriptions:create', args),
@@ -59,6 +77,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getCounts: (args) => ipcRenderer.invoke('alerts:getCounts', args),
     getAll: (args) => ipcRenderer.invoke('alerts:getAll', args),
   },
+  notifications: {
+    getTodayBirthdays: () => ipcRenderer.invoke('notifications:getTodayBirthdays'),
+    getAll: (args) => ipcRenderer.invoke('notifications:getAll', args),
+  },
   reports: {
     getSummary: (args) => ipcRenderer.invoke('reports:getSummary', args),
     getDashboardMetrics: (args) => ipcRenderer.invoke('reports:getDashboardMetrics', args),
@@ -70,6 +92,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     restore: (args) => ipcRenderer.invoke('backup:restore', args),
     exportClientsCsv: (args) => ipcRenderer.invoke('backup:exportClientsCsv', args),
     exportFinancialsCsv: (args) => ipcRenderer.invoke('backup:exportFinancialsCsv', args),
+    exportJson: (args) => ipcRenderer.invoke('backup:exportJson', args),
+    importJson: (args) => ipcRenderer.invoke('backup:importJson', args),
+    factoryReset: (args) => ipcRenderer.invoke('backup:factoryReset', args),
   },
   print: {
     receipt: (args) => ipcRenderer.invoke('print:receipt', args),
@@ -104,9 +129,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener('update-error', listener);
     },
   },
-  license: {
-    getMachineId: () => ipcRenderer.invoke('license:getMachineId'),
-    checkStatus: () => ipcRenderer.invoke('license:checkStatus'),
-    activate: (args) => ipcRenderer.invoke('license:activate', args),
-  }
+  settings: {
+    getWhatsAppTemplates: () => ipcRenderer.invoke('settings:getWhatsAppTemplates'),
+    saveWhatsAppTemplates: (templates) => ipcRenderer.invoke('settings:saveWhatsAppTemplates', templates),
+  },
 });

@@ -8,7 +8,6 @@ import Clients from './pages/Clients';
 import ClientProfile from './pages/ClientProfile';
 import Reports from './pages/Reports';
 import Settings from './pages/Settings';
-import Activation from './pages/Activation';
 import AppShell from './components/layout/AppShell';
 import UpdateNotification from './components/UpdateNotification';
 import logo from './assets/logo.png';
@@ -48,12 +47,6 @@ const AppEntry = () => {
   useEffect(() => {
     const checkSetup = async () => {
       try {
-        const licenseResult = await window.electronAPI.license.checkStatus();
-        if (!licenseResult.isLicensed) {
-          navigate('/activation', { replace: true });
-          return;
-        }
-
         const result = await window.electronAPI.auth.checkOwnerExists();
         if (!result.exists) {
           navigate('/setup', { replace: true });
@@ -82,25 +75,11 @@ const AppEntry = () => {
 };
 
 function App() {
-  const [isLicensed, setIsLicensed] = useState(null);
-
-  const checkLicenseStatus = async () => {
-    try {
-      const status = await window.electronAPI.license.checkStatus();
-      setIsLicensed(status.isLicensed);
-      return status.isLicensed;
-    } catch (e) {
-      setIsLicensed(false);
-      return false;
-    }
-  };
-
   return (
     <>
       <UpdateNotification />
       <Routes>
         <Route path="/" element={<AppEntry />} />
-        <Route path="/activation" element={<Activation onActivationSuccess={checkLicenseStatus} />} />
         <Route path="/setup" element={<SetupWizard />} />
         <Route path="/login" element={<Login />} />
         

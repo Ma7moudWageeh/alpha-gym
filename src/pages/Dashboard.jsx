@@ -1,15 +1,18 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Users, AlertTriangle, Clock, MessageSquare, RefreshCw, X, ShieldAlert, DollarSign, UserPlus, Receipt, UserCheck, CreditCard, ChevronRight, Printer, Snowflake } from 'lucide-react';
+import { Users, Clock, MessageSquare, RefreshCw, X, CreditCard, ChevronRight, Printer, Snowflake } from 'lucide-react';
 import CheckInModal from '../components/CheckInModal';
+import { formatDateDDMMYYYY } from '../utils/dateFormat';
+import DateInput from '../components/DateInput';
+
+import { WhatsAppSingleButton } from '../components/common/WhatsAppButton';
 
 const Dashboard = () => {
   const { user } = useContext(AuthContext);
   const isOwner = user?.role === 'owner';
   const navigate = useNavigate();
 
-  const [activeTab, setActiveTab] = useState('expiring');
   const [metrics, setMetrics] = useState({
     activeMembers: 0,
     frozenMembers: 0,
@@ -17,15 +20,13 @@ const Dashboard = () => {
     monthRevenue: 0,
     expiringSoon: 0
   });
-  const [counts, setCounts] = useState({ expiring_soon_count: 0, expired_count: 0, total_alerts: 0 });
+  const [counts, setCounts] = useState({ expiring_soon_count: 0, total_alerts: 0 });
   const [expiringList, setExpiringList] = useState([]);
-  const [expiredList, setExpiredList] = useState([]);
   const [recentPayments, setRecentPayments] = useState([]);
   const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [checkInOpen, setCheckInOpen] = useState(false);
 
-  // Renewal modal state
   const [renewClient, setRenewClient] = useState(null);
   const [subFormData, setSubFormData] = useState({
     package_id: '',
@@ -36,13 +37,12 @@ const Dashboard = () => {
   });
   const [subError, setSubError] = useState('');
 
-  const fetchDashboardData = async () => {
+  const fetchDashboardData = useCallback(async () => {
     setLoading(true);
-    const [metricsRes, countsRes, expiringRes, expiredRes, payRes, pkgRes] = await Promise.all([
+    const [metricsRes, countsRes, expiringRes, payRes, pkgRes] = await Promise.all([
       window.electronAPI.reports.getDashboardMetrics(),
-      window.electronAPI.alerts.getCounts({ expiringDays: 7, expiredDays: 30 }),
-      window.electronAPI.alerts.getExpiringSoon({ days: 7 }),
-      window.electronAPI.alerts.getExpired({ days: 30 }),
+      window.electronAPI.alerts.getCounts(),
+      window.electronAPI.alerts.getExpiringSoon(),
       window.electronAPI.payments.getAll({ timeframe: 'month' }),
       window.electronAPI.packages.getAll()
     ]);
@@ -50,16 +50,30 @@ const Dashboard = () => {
     if (metricsRes.success) setMetrics(metricsRes.metrics);
     if (countsRes.success) setCounts(countsRes);
     if (expiringRes.success) setExpiringList(expiringRes.subscriptions);
-    if (expiredRes.success) setExpiredList(expiredRes.subscriptions);
-    if (payRes.success) setRecentPayments(payRes.payments.slice(0, 6)); // top 6
+    if (payRes.success) setRecentPayments(payRes.payments.slice(0, 6));
     if (pkgRes.success) setPackages(pkgRes.packages.filter(p => p.is_active === 1));
 
     setLoading(false);
-  };
+  }, []);
 
   useEffect(() => {
     fetchDashboardData();
-  }, []);
+
+    const onRefresh = () => fetchDashboardData();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') fetchDashboardData();
+    };
+
+    window.addEventListener('dashboard-refresh', onRefresh);
+    window.addEventListener('focus', onRefresh);
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      window.removeEventListener('dashboard-refresh', onRefresh);
+      window.removeEventListener('focus', onRefresh);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [fetchDashboardData]);
 
   const openRenewModal = (sub) => {
     setRenewClient(sub);
@@ -116,7 +130,7 @@ const Dashboard = () => {
     } else {
       const clientInfo = renewClient;
       setRenewClient(null);
-      fetchDashboardData();
+      await fetchDashboardData();
 
       if (shouldPrint) {
         window.electronAPI.print.receipt({
@@ -126,51 +140,39 @@ const Dashboard = () => {
           package_name: pkgTitle,
           amount: payload.price,
           paid_amount: payload.paid_amount,
-          payment_date: payload.start_date
+          payment_date: payload.start_date,
+          start_date: result.start_date || payload.start_date,
+          end_date: result.end_date || '',
         });
       }
     }
   };
 
-  const formatWhatsAppUrl = (phone, name, daysLeft, isExpired) => {
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
-    const msg = isExpired
-      ? `Hello ${name}, your Alpha Gym subscription has expired. Please contact us to renew your membership!`
-      : `Hello ${name}, your Alpha Gym subscription expires in ${daysLeft} days. Please visit us to renew!`;
-    return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+
+  const timeLeftLabel = (daysRemaining) => {
+    const days = Number(daysRemaining);
+    if (days === 0) return 'TODAY';
+    if (days === 1) return '1 DAY';
+    return `${days} DAYS`;
   };
+
+  const validExpiringClients = (expiringList || []).filter((client) => {
+    const daysLeft = client.days_remaining !== undefined ? Number(client.days_remaining) : Number(client.days_left);
+    // Must not be overdue, and must be within the 1-day threshold
+    return !Number.isNaN(daysLeft) && daysLeft >= 0 && daysLeft <= 1;
+  });
 
   return (
     <div className="space-y-6">
-      {/* Header & Quick Action Bar */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-black font-display text-white uppercase tracking-wider">Performance Deck</h1>
+          <h1 className="text-3xl font-black font-display text-white uppercase tracking-wider">Dashboard</h1>
           <p className="text-slate-400 mt-1 uppercase tracking-widest text-xs font-bold">Welcome back, {user?.fullName || 'Operator'}!</p>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => navigate('/clients')}
-            className="flex items-center px-4 py-2.5 bg-[#CCFF00] text-black hover:bg-[#b8e600] active:scale-95 rounded-xl text-sm font-bold uppercase tracking-wider transition-all shadow-sm"
-          >
-            <UserPlus className="w-4 h-4 mr-2" /> Add Client
-          </button>
-          {isOwner && (
-            <button
-              onClick={() => navigate('/reports')}
-              className="flex items-center px-4 py-2.5 bg-[#181E2A] border border-[#222B3D] text-white hover:border-[#CCFF00] rounded-xl text-sm font-bold uppercase tracking-wider transition-all shadow-sm"
-            >
-              <Receipt className="w-4 h-4 mr-2 text-[#CCFF00]" /> Log Expense
-            </button>
-          )}
         </div>
       </div>
 
-      {/* KPI Cards Grid */}
       <div className={`grid grid-cols-1 md:grid-cols-2 ${isOwner ? 'lg:grid-cols-3' : 'lg:grid-cols-2'} gap-6`}>
-        {/* Active Subscriptions */}
-        <div 
+        <div
           onClick={() => navigate('/clients?status=active')}
           className="card p-6 bg-[#121721] border-t-4 border-[#CCFF00] flex items-center justify-between cursor-pointer hover:border-[#CCFF00] hover:scale-[1.01] transition-all shadow-sm"
         >
@@ -184,8 +186,7 @@ const Dashboard = () => {
           </div>
         </div>
 
-        {/* Frozen Subscriptions */}
-        <div 
+        <div
           onClick={() => navigate('/clients?status=frozen')}
           className="card p-6 bg-[#121721] border-t-4 border-[#06B6D4] flex items-center justify-between cursor-pointer hover:border-[#06B6D4] hover:scale-[1.01] transition-all shadow-sm"
         >
@@ -199,11 +200,8 @@ const Dashboard = () => {
           </div>
         </div>
 
-
-
-        {/* Today's Revenue (Owner Only) */}
         {isOwner && (
-          <div 
+          <div
             onClick={() => navigate('/reports')}
             className="card p-6 bg-[#121721] border-t-4 border-[#CCFF00] flex items-center justify-between cursor-pointer hover:border-[#CCFF00] hover:scale-[1.01] transition-all shadow-sm"
           >
@@ -219,47 +217,18 @@ const Dashboard = () => {
         )}
       </div>
 
-      {/* Split Main Content */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Alert Widget (2 Cols) */}
         <div id="alerts-widget" className="lg:col-span-2 card overflow-hidden flex flex-col">
           <div className="border-b border-[#222B3D] bg-[#121721] px-6 py-4 flex items-center justify-between">
-            <div className="flex space-x-6">
-              <button
-                onClick={() => setActiveTab('expiring')}
-                className={`font-black font-display tracking-wider uppercase text-sm transition-colors pb-1 border-b-2 flex items-center ${
-                  activeTab === 'expiring'
-                    ? 'text-[#CCFF00] border-[#CCFF00]'
-                    : 'text-slate-400 border-transparent hover:text-slate-200'
-                }`}
-              >
-                <Clock className="w-4 h-4 mr-2" />
-                Expiring Soon ({counts.expiring_soon_count})
-              </button>
-              <button
-                onClick={() => setActiveTab('expired')}
-                className={`font-black font-display tracking-wider uppercase text-sm transition-colors pb-1 border-b-2 flex items-center ${
-                  activeTab === 'expired'
-                    ? 'text-[#EF4444] border-[#EF4444]'
-                    : 'text-slate-400 border-transparent hover:text-slate-200'
-                }`}
-              >
-                <AlertTriangle className="w-4 h-4 mr-2" />
-                Expired ({counts.expired_count})
-              </button>
+            <div className="flex items-center gap-2 text-amber-400 font-bold tracking-wide text-sm">
+              <Clock className="w-4 h-4 text-amber-400" />
+              <span>EXPIRING SOON ({validExpiringClients.length})</span>
             </div>
-
-            <button
-              onClick={() => navigate('/clients')}
-              className="text-xs font-bold uppercase tracking-wider text-[#CCFF00] hover:underline flex items-center"
-            >
-              View Roster <ChevronRight className="w-3.5 h-3.5 ml-0.5" />
-            </button>
           </div>
 
           {loading ? (
             <div className="p-8 text-center text-slate-400 font-bold uppercase tracking-wider text-sm">Loading alerts...</div>
-          ) : activeTab === 'expiring' ? (
+          ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse">
                 <thead>
@@ -271,102 +240,46 @@ const Dashboard = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#222B3D] text-sm">
-                  {expiringList.map((sub) => (
-                    <tr 
-                      key={sub.id} 
-                      onClick={() => navigate(`/clients/${sub.client_id}`)}
-                      className="cursor-pointer hover:bg-white/5 transition-colors"
-                    >
-                      <td className="px-5 py-4 font-bold text-white">
-                        {sub.client_name} <span className="text-slate-500 text-xs font-mono ml-1">({sub.client_code})</span>
-                      </td>
-                      <td className="px-5 py-4 text-slate-300 font-medium">{sub.package_title}</td>
-                      <td className="px-5 py-4">
-                        <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-[#CCFF00]/10 text-[#CCFF00] border border-[#CCFF00]/30">
-                          {sub.days_remaining === 0 ? 'TODAY' : `${sub.days_remaining}D LEFT`}
-                        </span>
-                      </td>
-                      <td className="px-5 py-4 text-right space-x-2">
-                        <a
-                          href={formatWhatsAppUrl(sub.client_phone, sub.client_name, sub.days_remaining, false)}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center px-2 py-1.5 bg-[#06B6D4]/20 hover:bg-[#06B6D4]/30 text-[#06B6D4] border border-[#06B6D4]/30 rounded-xl text-xs font-bold transition-colors"
-                          title="WhatsApp"
-                        >
-                          <MessageSquare className="w-4 h-4" />
-                        </a>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openRenewModal(sub); }}
-                          className="inline-flex items-center px-4 py-2 bg-[#CCFF00] text-black hover:bg-[#b8e600] active:scale-95 rounded-xl text-xs font-bold uppercase tracking-wider transition-all"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Renew
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {expiringList.length === 0 && (
+                  {validExpiringClients.map((sub) => {
+                    const daysLeft = sub.days_remaining !== undefined ? sub.days_remaining : sub.days_left;
+                    return (
+                      <tr
+                        key={sub.id}
+                        onClick={() => navigate(`/clients/${sub.client_id}`)}
+                        className="cursor-pointer hover:bg-white/5 transition-colors"
+                      >
+                        <td className="px-5 py-4 font-bold text-white">
+                          {sub.client_name} <span className="text-slate-500 text-xs font-mono ml-1">({sub.client_code})</span>
+                        </td>
+                        <td className="px-5 py-4 text-slate-300 font-medium">{sub.package_title}</td>
+                        <td className="px-5 py-4">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30 shadow-[0_0_8px_rgba(245,158,11,0.15)]">
+                            {timeLeftLabel(daysLeft)}
+                          </span>
+                        </td>
+                        <td className="px-5 py-4 text-right" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-2">
+                            <WhatsAppSingleButton
+                              client={{ ...sub, name: sub.client_name, phone: sub.client_phone }}
+                              context="EXPIRING"
+                              disabled={!sub.client_phone}
+                              size="md"
+                            />
+                            <button
+                              onClick={(e) => { e.stopPropagation(); openRenewModal(sub); }}
+                              className="inline-flex items-center px-4 py-2 bg-[#CCFF00] text-black hover:bg-[#b8e600] active:scale-95 rounded-xl text-xs font-bold uppercase tracking-wider transition-all"
+                            >
+                              <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Renew
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {validExpiringClients.length === 0 && (
                     <tr>
                       <td colSpan={4} className="px-6 py-8 text-center text-slate-500 font-bold uppercase tracking-widest text-xs">
-                        No active memberships expiring soon.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-[#181E2A] text-slate-400 text-xs uppercase tracking-widest font-black border-b border-[#222B3D]">
-                    <th className="px-5 py-4">Member</th>
-                    <th className="px-5 py-4">Last Package</th>
-                    <th className="px-5 py-4">Expired</th>
-                    <th className="px-5 py-4 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-[#222B3D] text-sm">
-                  {expiredList.map((sub) => (
-                    <tr 
-                      key={sub.id} 
-                      onClick={() => navigate(`/clients/${sub.client_id}`)}
-                      className="cursor-pointer hover:bg-white/5 transition-colors"
-                    >
-                      <td className="px-5 py-4 font-bold text-white">
-                        {sub.client_name} <span className="text-slate-500 text-xs font-mono ml-1">({sub.client_code})</span>
-                      </td>
-                      <td className="px-5 py-4 text-slate-300 font-medium">{sub.package_title}</td>
-                      <td className="px-5 py-4">
-                        <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-[#EF4444]/10 text-[#EF4444] border border-[#EF4444]/30">
-                          {sub.days_expired || 1}D AGO
-                        </span>
-                      </td>
-                      <td className="px-5 py-4 text-right space-x-2">
-                        <a
-                          href={formatWhatsAppUrl(sub.client_phone, sub.client_name, 0, true)}
-                          target="_blank"
-                          rel="noreferrer"
-                          onClick={(e) => e.stopPropagation()}
-                          className="inline-flex items-center px-2 py-1.5 bg-[#06B6D4]/20 hover:bg-[#06B6D4]/30 text-[#06B6D4] border border-[#06B6D4]/30 rounded-xl text-xs font-bold transition-colors"
-                          title="WhatsApp"
-                        >
-                          <MessageSquare className="w-4 h-4" />
-                        </a>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openRenewModal(sub); }}
-                          className="inline-flex items-center px-4 py-2 bg-[#CCFF00] text-black hover:bg-[#b8e600] active:scale-95 rounded-xl text-xs font-bold uppercase tracking-wider transition-all"
-                        >
-                          <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> Renew
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {expiredList.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-6 py-8 text-center text-slate-500 font-bold uppercase tracking-widest text-xs">
-                        No recent expired memberships.
+                        No memberships expiring soon.
                       </td>
                     </tr>
                   )}
@@ -376,7 +289,6 @@ const Dashboard = () => {
           )}
         </div>
 
-        {/* Right Column: Recent Payments Feed (1 Col) */}
         <div className="card overflow-hidden flex flex-col">
           <div className="border-b border-[#222B3D] bg-[#121721] px-6 py-4 flex items-center justify-between">
             <h3 className="font-black font-display tracking-wider uppercase text-white text-sm flex items-center">
@@ -398,7 +310,7 @@ const Dashboard = () => {
                 <div>
                   <p className="font-bold text-white text-sm uppercase tracking-wide">{p.client_name || 'Walk-in'}</p>
                   <p className="text-slate-400 mt-1 uppercase font-bold text-[10px] tracking-widest">{p.package_title || p.type}</p>
-                  <p className="text-[#06B6D4] font-mono text-[10px] mt-1">{p.paid_at?.split(' ')[0]}</p>
+                  <p className="text-[#06B6D4] font-mono text-[10px] mt-1">{formatDateDDMMYYYY(p.paid_at)}</p>
                 </div>
                 <div className="text-right">
                   <span className="font-black font-display text-[#CCFF00] text-lg">+{p.amount.toFixed(0)}</span>
@@ -415,10 +327,8 @@ const Dashboard = () => {
         </div>
       </div>
 
-      {/* CheckIn Overlay Modal */}
       <CheckInModal isOpen={checkInOpen} onClose={() => setCheckInOpen(false)} />
 
-      {/* Dashboard Renewal Modal */}
       {renewClient && (
         <div className="fixed inset-0 bg-[#0B0E14]/80 flex items-center justify-center p-4 z-[70]">
           <div className="bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
@@ -455,11 +365,10 @@ const Dashboard = () => {
 
               <div className="space-y-1.5">
                 <label className="text-slate-400 text-xs font-bold uppercase tracking-widest">Start Date</label>
-                <input
-                  type="date"
+                  <DateInput
                   value={subFormData.start_date}
-                  onChange={(e) => setSubFormData(prev => ({ ...prev, start_date: e.target.value }))}
-                  className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white font-medium outline-none focus:border-[#CCFF00] focus:ring-1 focus:ring-[#CCFF00] transition-all"
+                  onChange={(iso) => setSubFormData(prev => ({ ...prev, start_date: iso }))}
+                  className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white font-medium outline-none focus:border-[#CCFF00] focus:ring-1 focus:ring-[#CCFF00] transition-all font-mono"
                 />
               </div>
 

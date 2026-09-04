@@ -6,9 +6,9 @@ import logo from '../../assets/logo.png';
 
 const navItems = [
   { path: '/dashboard', label: 'DASHBOARD', icon: LayoutDashboard },
-  { path: '/clients', label: 'CLIENT DIRECTORY', icon: Users },
-  { path: '/reports', label: 'PERFORMANCE DECK', icon: LineChart, ownerOnly: true },
-  { path: '/settings', label: 'SYSTEM CONFIG', icon: Settings }
+  { path: '/clients', label: 'CLIENTS', icon: Users },
+  { path: '/reports', label: 'REPORTS', icon: LineChart, ownerOnly: true },
+  { path: '/settings', label: 'SETTINGS', icon: Settings }
 ];
 
 const Sidebar = () => {

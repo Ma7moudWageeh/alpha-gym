@@ -4,6 +4,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer,
   AreaChart, Area 
 } from 'recharts';
+import { formatDateDDMMYYYY } from '../utils/dateFormat';
 
 const formatMonth = (yyyy_mm) => {
   const [year, month] = yyyy_mm.split('-');
@@ -221,7 +222,7 @@ export default function HistoricalArchive() {
                   <tbody className="divide-y divide-[#222B3D] text-sm">
                     {monthDetails.incomeItems.map((item, idx) => (
                       <tr key={idx} className="hover:bg-[#121721]/50 transition-colors">
-                        <td className="px-5 py-3 text-slate-400 font-mono text-xs">{item.date?.split(' ')[0]}</td>
+                        <td className="px-5 py-3 text-slate-400 font-mono text-xs">{formatDateDDMMYYYY(item.date) || '—'}</td>
                         <td className="px-5 py-3 text-white font-bold">{item.client_name || 'Walk-in'}</td>
                         <td className="px-5 py-3 text-slate-300">{item.package_title || item.type}</td>
                         <td className="px-5 py-3 text-right text-brand-success font-bold">+{item.amount.toFixed(2)} EGP</td>
@@ -249,7 +250,7 @@ export default function HistoricalArchive() {
                   <tbody className="divide-y divide-[#222B3D] text-sm">
                     {monthDetails.expenseItems.map((item, idx) => (
                       <tr key={idx} className="hover:bg-[#121721]/50 transition-colors">
-                        <td className="px-5 py-3 text-slate-400 font-mono text-xs">{item.date}</td>
+                        <td className="px-5 py-3 text-slate-400 font-mono text-xs">{formatDateDDMMYYYY(item.date) || '—'}</td>
                         <td className="px-5 py-3">
                           <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-[#181E2A] text-slate-300">
                             {item.category || 'Miscellaneous'}

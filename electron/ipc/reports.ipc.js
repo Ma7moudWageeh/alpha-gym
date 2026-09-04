@@ -79,7 +79,12 @@ ipcMain.handle('reports:getDashboardMetrics', async (event, { timeframe = 'month
 
     // Total Frozen Members
     const frozenSubCountRow = db.prepare("SELECT COUNT(DISTINCT client_id) as count FROM subscriptions WHERE status = 'frozen'").get();
-    const expiredCountRow = db.prepare("SELECT COUNT(DISTINCT client_id) as count FROM subscriptions WHERE status = 'expired' OR (status = 'active' AND DATE(end_date) < DATE('now', 'localtime'))").get();
+    const expiredCountRow = db.prepare(`
+      SELECT COUNT(DISTINCT client_id) as count
+      FROM subscriptions
+      WHERE (status = 'expired' OR (status = 'active' AND DATE(end_date) < DATE('now', 'localtime')))
+        AND DATE(end_date) >= DATE('now', '-30 days', 'localtime')
+    `).get();
     
     // Today's Revenue
     const todayRevenueRow = db.prepare("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE date(paid_at) = ?").get(today);

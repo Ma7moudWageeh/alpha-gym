@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ShieldCheck, User, Lock, KeyRound } from 'lucide-react';
+import { AuthContext } from '../context/AuthContext';
 import logo from '../assets/logo.png';
 
 const SetupWizard = () => {
   const navigate = useNavigate();
+  const { login } = useContext(AuthContext);
   const [formData, setFormData] = useState({
     fullName: '',
     username: '',
@@ -34,7 +36,7 @@ const SetupWizard = () => {
     }
 
     if (!/^\d{4,6}$/.test(formData.masterPin)) {
-      setError('Master PIN must be 4 to 6 numeric digits.');
+      setError('Security PIN must be 4 to 6 numeric digits.');
       return;
     }
 
@@ -46,12 +48,26 @@ const SetupWizard = () => {
       masterPin: formData.masterPin
     });
 
-    setLoading(false);
     if (result.error) {
+      setLoading(false);
       setError(result.error);
-    } else {
-      navigate('/login');
+      return;
     }
+
+    const loginResult = await window.electronAPI.auth.login({
+      username: formData.username,
+      password: formData.password,
+    });
+    setLoading(false);
+
+    if (loginResult.error) {
+      setError(loginResult.error);
+      navigate('/login');
+      return;
+    }
+
+    login(loginResult.user);
+    navigate('/dashboard', { replace: true });
   };
 
   return (
@@ -139,7 +155,7 @@ const SetupWizard = () => {
           </div>
 
           <div className="space-y-1">
-            <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Master PIN (4-6 digits)</label>
+            <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Security PIN (4-6 digits)</label>
             <div className="relative">
               <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
                 <KeyRound className="h-5 w-5 text-slate-500" />
@@ -159,7 +175,7 @@ const SetupWizard = () => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 px-4 bg-[#CCFF00] text-black font-black uppercase tracking-wider hover:bg-[#b8e600] text-white font-semibold rounded shadow-md transition-colors disabled:opacity-50 mt-4"
+            className="w-full py-3 px-4 bg-[#CCFF00] text-black font-black uppercase tracking-wider hover:bg-[#b8e600] font-semibold rounded shadow-md transition-colors disabled:opacity-50 mt-4"
           >
             {loading ? 'Creating Owner...' : 'Complete Setup'}
           </button>

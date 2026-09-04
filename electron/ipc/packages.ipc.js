@@ -71,3 +71,42 @@ ipcMain.handle('packages:toggleActive', async (event, { id, userRole }) => {
     return { error: err.message };
   }
 });
+
+ipcMain.handle('packages:delete', async (event, packageId) => {
+  try {
+    const targetId = typeof packageId === 'object' && packageId !== null ? (packageId.id || packageId.packageId) : packageId;
+    const userRole = typeof packageId === 'object' && packageId !== null ? packageId.userRole : undefined;
+
+    if (userRole && userRole !== 'owner') {
+      return {
+        success: false,
+        error: 'UNAUTHORIZED',
+        message: 'Unauthorized: Only owners can delete membership packages.'
+      };
+    }
+
+    // 1. Safety Check: Verify if any client subscriptions reference this package
+    const activeCheck = db.prepare(`
+      SELECT COUNT(*) AS count 
+      FROM subscriptions 
+      WHERE package_id = ?
+    `).get(targetId);
+
+    if (activeCheck && activeCheck.count > 0) {
+      return {
+        success: false,
+        error: 'CANNOT_DELETE_ACTIVE_RECORDS',
+        message: 'Cannot permanently delete this package because it is linked to existing client subscriptions. Please deactivate it instead.'
+      };
+    }
+
+    // 2. Perform deletion if no subscriptions are attached
+    const result = db.prepare('DELETE FROM packages WHERE id = ?').run(targetId);
+    
+    return { success: result.changes > 0 };
+  } catch (error) {
+    console.error('Error deleting package:', error);
+    return { success: false, error: error.message };
+  }
+});
+

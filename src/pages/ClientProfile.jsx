@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useCallback } from 'react';
+import React, { useState, useEffect, useContext, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import {
@@ -7,6 +7,10 @@ import {
   FileText, RefreshCw, AlertCircle, CheckSquare, Square, X,
   TrendingUp, TrendingDown, Minus, Camera, Trash
 } from 'lucide-react';
+import { formatDateDDMMYYYY, isBirthdayToday, getAvatarGlowClass } from '../utils/dateFormat';
+import DateInput from '../components/DateInput';
+
+import { WhatsAppContextualButtons } from '../components/common/WhatsAppButton';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function addDays(dateStr, days) {
@@ -29,17 +33,26 @@ function fmt(val, fallback = '—') {
   return val !== null && val !== undefined && val !== '' ? val : fallback;
 }
 
+function getInitials(name) {
+  if (!name) return '??';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length > 1) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.substring(0, Math.min(name.length, 3)).toUpperCase();
+}
+
 const StatusBadge = ({ status }) => {
+  const s = status ? String(status).toLowerCase() : '';
   const map = {
-    active:  'bg-[#CCFF00]/10 text-[#CCFF00] border-[#CCFF00]/20',
-    expired: 'bg-red-500/10 text-red-400 border-red-500/20',
-    frozen:  'bg-sky-500/10 text-sky-400 border-sky-500/20',
+    active:   'bg-[#CCFF00]/10 text-[#CCFF00] border-[#CCFF00]/20',
+    expired:  'bg-red-500/10 text-red-400 border-red-500/20',
+    frozen:   'bg-sky-500/10 text-sky-400 border-sky-500/20',
+    inactive: 'bg-slate-800 text-slate-400 border-slate-700',
   };
-  const label = { active: 'Active', expired: 'Expired', frozen: 'Frozen' };
-  const cls = map[status] || 'bg-[#181E2A] text-slate-400 border-slate-600';
+  const label = { active: 'Active', expired: 'Expired', frozen: 'Frozen', inactive: 'Inactive' };
+  const cls = map[s] || 'bg-[#181E2A] text-slate-400 border-slate-600';
   return (
     <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${cls}`}>
-      {label[status] || 'None'}
+      {label[s] || 'None'}
     </span>
   );
 };
@@ -91,19 +104,27 @@ const EditClientModal = ({ client, packages, onClose, onSaved }) => {
   const F = ({ label, field, type = 'text', placeholder = '' }) => (
     <div className="space-y-1.5">
       <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">{label}</label>
-      <input
-        type={type}
-        value={form[field]}
-        onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))}
-        placeholder={placeholder}
-        className="w-full px-3 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
-      />
+      {type === 'date' ? (
+        <DateInput
+          value={form[field]}
+          onChange={(iso) => setForm(p => ({ ...p, [field]: iso }))}
+          className="w-full px-3 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm font-mono"
+        />
+      ) : (
+        <input
+          type={type}
+          value={form[field]}
+          onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))}
+          placeholder={placeholder}
+          className="w-full px-3 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
+        />
+      )}
     </div>
   );
 
   return (
     <div className="fixed inset-0 bg-[#0B0E14]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-[#1E293B] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh]">
+      <div className="bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh]">
         <div className="px-6 py-4 border-b border-[#222B3D] flex justify-between items-center flex-shrink-0">
           <h3 className="text-lg font-black font-display uppercase tracking-wider text-white">Edit Client</h3>
           <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white hover:bg-[#181E2A] rounded-xl transition-colors">
@@ -233,7 +254,7 @@ const SubscriptionModal = ({ client, packages, isRenew, onClose, onSaved }) => {
 
   return (
     <div className="fixed inset-0 bg-[#0B0E14]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-[#1E293B] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-md flex flex-col">
+      <div className="bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-md flex flex-col">
         <div className="px-6 py-4 border-b border-[#222B3D] flex justify-between items-center">
           <h3 className="text-lg font-black font-display uppercase tracking-wider text-white">{isRenew ? 'Renew Subscription' : 'New Subscription'}</h3>
           <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white hover:bg-[#181E2A] rounded-xl transition-colors"><X className="w-5 h-5" /></button>
@@ -251,8 +272,11 @@ const SubscriptionModal = ({ client, packages, isRenew, onClose, onSaved }) => {
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Start Date</label>
-              <input type="date" value={form.start_date} onChange={e => setForm(p => ({ ...p, start_date: e.target.value }))}
-                className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors" />
+              <DateInput
+                value={form.start_date}
+                onChange={(iso) => setForm(p => ({ ...p, start_date: iso }))}
+                className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors font-mono"
+              />
             </div>
             <div className="space-y-1.5">
               <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Price (EGP)</label>
@@ -262,7 +286,7 @@ const SubscriptionModal = ({ client, packages, isRenew, onClose, onSaved }) => {
           </div>
           {endDatePreview && (
             <div className="flex items-center gap-2 text-sm text-[#CCFF00] bg-[#CCFF00]/10 border border-[#CCFF00]/20 px-3 py-2 rounded">
-              <Calendar className="w-4 h-4" /> Ends on: <strong>{endDatePreview}</strong>
+              <Calendar className="w-4 h-4" /> Ends on: <strong>{formatDateDDMMYYYY(endDatePreview)}</strong>
             </div>
           )}
           <div className="space-y-1.5">
@@ -307,7 +331,7 @@ const WeightModal = ({ client, onClose, onSaved }) => {
 
   return (
     <div className="fixed inset-0 bg-[#0B0E14]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-[#1E293B] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-sm flex flex-col">
+      <div className="bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-sm flex flex-col">
         <div className="px-6 py-4 border-b border-[#222B3D] flex justify-between items-center">
           <h3 className="text-lg font-black font-display uppercase tracking-wider text-white flex items-center gap-2"><Scale className="w-5 h-5 text-[#CCFF00]" />Log Weight</h3>
           <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white hover:bg-[#181E2A] rounded-xl transition-colors"><X className="w-5 h-5" /></button>
@@ -348,13 +372,18 @@ const ClientProfile = () => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('subscriptions');
   const [photoUrl, setPhotoUrl] = useState(null);
+  const [photoBroken, setPhotoBroken] = useState(false);
   const [photoUploading, setPhotoUploading] = useState(false);
+  const [showImageModal, setShowImageModal] = useState(false);
+  const fileInputRef = useRef(null);
 
   const [showEditModal, setShowEditModal] = useState(false);
   const [showSubModal, setShowSubModal] = useState(false);
   const [showWeightModal, setShowWeightModal] = useState(false);
   const [showFreezeModal, setShowFreezeModal] = useState(false);
   const [freezeReason, setFreezeReason] = useState('');
+  const [freezeMode, setFreezeMode] = useState('timed'); // timed | indefinite
+  const [freezeDays, setFreezeDays] = useState('7');
   const [freezeError, setFreezeError] = useState('');
   const [freezing, setFreezing] = useState(false);
 
@@ -365,8 +394,10 @@ const ClientProfile = () => {
       // Use base64 URL sent from backend
       if (res.client.profile_photo_url) {
         setPhotoUrl(res.client.profile_photo_url);
+        setPhotoBroken(false);
       } else {
         setPhotoUrl(null);
+        setPhotoBroken(false);
       }
     }
     setLoading(false);
@@ -390,31 +421,79 @@ const ClientProfile = () => {
     else alert(res.error || 'Failed to delete client');
   };
 
-  const handleUploadPhoto = async () => {
-    if (photoUploading) return;
+  const handleFileSelected = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const filePath = window.electronAPI.getPathForFile
+      ? window.electronAPI.getPathForFile(file)
+      : (file.path || undefined);
+
     setPhotoUploading(true);
-    const res = await window.electronAPI.clients.uploadPhoto({ client_id: client.id });
+    const res = await window.electronAPI.clients.uploadPhoto({
+      client_id: client.id,
+      filePath: filePath || undefined,
+      fromInput: true,
+    });
     setPhotoUploading(false);
-    if (res?.success) setPhotoUrl(res.photoPath);
+
+    if (fileInputRef.current) fileInputRef.current.value = '';
+
+    if (res?.success) {
+      const url = res.photoUrl || res.profile_photo_url || res.photoPath;
+      if (url) {
+        setPhotoUrl(url);
+        setPhotoBroken(false);
+        setClient(prev => prev ? { ...prev, profile_photo_url: url, photoUrl: url } : prev);
+      } else {
+        await fetchClient();
+      }
+    } else if (res?.error) {
+      alert(`Failed to upload photo: ${res.error}`);
+    }
   };
 
-  const handleRemovePhoto = async (e) => {
-    e.stopPropagation();
-    if (!window.confirm('Remove profile photo?')) return;
-    const res = await window.electronAPI.clients.removePhoto({ client_id: client.id });
-    if (res?.success) setPhotoUrl(null);
+  const triggerFileInput = (e) => {
+    if (e) e.stopPropagation();
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleDeletePhoto = async (e) => {
+    if (e) e.stopPropagation();
+    if (!window.confirm('Delete profile photo permanently?')) return;
+    const res = await window.electronAPI.clients.deletePhoto(client.id);
+    if (res?.success) {
+      setPhotoUrl(null);
+      setPhotoBroken(false);
+      setClient(prev => prev ? { ...prev, profile_photo_url: null, photoUrl: null, profile_photo: null } : prev);
+      setShowImageModal(false);
+    } else {
+      alert(res?.error || 'Failed to delete photo');
+    }
   };
 
   const handleFreeze = async () => {
     setFreezeError('');
+    if (freezeMode === 'timed') {
+      const days = parseInt(freezeDays, 10);
+      if (!days || days < 1) {
+        setFreezeError('Enter a valid number of freeze days.');
+        return;
+      }
+    }
     setFreezing(true);
     const res = await window.electronAPI.subscriptions.freeze({
       subscription_id: client.activeSubscription.id,
       reason: freezeReason,
+      mode: freezeMode,
+      freeze_days: freezeMode === 'timed' ? parseInt(freezeDays, 10) : undefined,
     });
     setFreezing(false);
     if (res.error) { setFreezeError(res.error); return; }
     setShowFreezeModal(false);
+    window.dispatchEvent(new Event('dashboard-refresh'));
     fetchClient();
   };
 
@@ -466,19 +545,19 @@ const ClientProfile = () => {
 
   let activeSub = client.activeSubscription;
   if (activeSub) {
-    const isExpired = new Date(activeSub.end_date) < new Date(new Date().setHours(0,0,0,0));
-    const currentStatus = activeSub.status === 'frozen' ? 'frozen' : (isExpired ? 'expired' : 'active');
-    activeSub = { ...activeSub, status: currentStatus };
+    // Prefer backend computed_status / profile-level client_status
+    const profileStatus = client.client_status || activeSub.computed_status || activeSub.status;
+    activeSub = { ...activeSub, status: profileStatus === 'expired' && activeSub.status === 'frozen' ? 'frozen' : (activeSub.status === 'frozen' ? 'frozen' : profileStatus) };
   }
-  
+
   if (client.subscriptionHistory) {
-    client.subscriptionHistory = client.subscriptionHistory.map(sub => {
-      const isExpired = new Date(sub.end_date) < new Date(new Date().setHours(0,0,0,0));
-      const currentStatus = sub.status === 'frozen' ? 'frozen' : (isExpired ? 'expired' : 'active');
-      return { ...sub, status: currentStatus };
-    });
+    client.subscriptionHistory = client.subscriptionHistory.map(sub => ({
+      ...sub,
+      status: sub.computed_status || sub.status,
+    }));
   }
   const age = calcAge(client.date_of_birth);
+  const profileStatus = client.client_status || (activeSub ? activeSub.status : null);
 
   // ── render ──────────────────────────────────────────────────────────────────
   return (
@@ -493,7 +572,9 @@ const ClientProfile = () => {
           <span className="font-medium">Back</span>
         </button>
 
-        <h1 className="text-2xl font-black font-display uppercase tracking-wider text-white flex-1 min-w-0 truncate px-4">{client.name}</h1>
+        <h1 className="text-2xl font-black font-display uppercase tracking-wider text-white flex items-center gap-2 flex-1 min-w-0 truncate px-4">
+          <span className="truncate">{client.name}</span>
+        </h1>
 
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
@@ -527,71 +608,118 @@ const ClientProfile = () => {
 
         {/* ── LEFT COLUMN ── */}
         <div className="lg:col-span-1 space-y-4">
-          <div className="card p-6 flex flex-col items-center text-center space-y-3">
-            {/* Clickable photo avatar */}
-            <div
-              className="relative w-24 h-24 group cursor-pointer"
-              onClick={handleUploadPhoto}
-              title="Click to upload photo"
-            >
-              {photoUrl ? (
-                <img
-                  src={photoUrl}
-                  alt={client.name}
-                  className="w-24 h-24 rounded-full object-cover border-2 border-[#222B3D]"
-                  onError={() => setPhotoUrl(null)}
-                />
-              ) : (
-                <div className="w-24 h-24 rounded-full bg-[#181E2A] border-2 border-[#222B3D] flex items-center justify-center">
-                  <span className="text-2xl font-black text-[#8B5CF6] uppercase">
-                    {client.name.trim().split(' ').slice(0, 2).map(p => p[0]).join('')}
-                  </span>
+          <div className="card p-6 flex flex-col items-center text-center space-y-4">
+            {/* Hidden File Input */}
+            <input
+              type="file"
+              ref={fileInputRef}
+              onChange={handleFileSelected}
+              accept="image/png, image/jpeg, image/webp"
+              className="hidden"
+            />
+
+            {/* Enlarged Avatar Container */}
+            <div className="relative group">
+              <div
+                className={`w-32 h-32 rounded-2xl bg-[#0B0E14] shadow-lg flex items-center justify-center relative overflow-hidden cursor-pointer transition-all duration-300 hover:scale-[1.02] ${getAvatarGlowClass(client)}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (photoUrl && !photoBroken) {
+                    setShowImageModal(true);
+                  } else {
+                    triggerFileInput(e);
+                  }
+                }}
+                title={photoUrl && !photoBroken ? "Click to view full-screen preview" : "Click to upload photo"}
+              >
+                {photoUrl && !photoBroken ? (
+                  <img
+                    src={photoUrl}
+                    alt={client.name}
+                    className="w-full h-full object-cover rounded-2xl"
+                    onError={() => setPhotoBroken(true)}
+                  />
+                ) : (
+                  <div className="w-full h-full rounded-2xl bg-[#0B0E14] flex items-center justify-center avatar-initials-fallback">
+                    <span className="text-3xl font-black text-[#CCFF00] uppercase font-display tracking-wider">
+                      {getInitials(client.name)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Camera Overlay on Hover */}
+                <div className="absolute inset-0 bg-[#0B0E14]/75 backdrop-blur-[2px] flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity p-2 text-center">
+                  {photoUploading ? (
+                    <div className="w-6 h-6 border-2 border-[#CCFF00] border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
+                    <>
+                      <Camera className="w-6 h-6 text-[#CCFF00] mb-1" />
+                      <span className="text-[10px] font-bold text-white uppercase tracking-wider">
+                        {photoUrl && !photoBroken ? 'View Preview' : 'Upload Photo'}
+                      </span>
+                    </>
+                  )}
                 </div>
-              )}
-              {/* Camera overlay on hover */}
-              <div className="absolute inset-0 rounded-full bg-[#0B0E14]/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                {photoUploading
-                  ? <div className="w-5 h-5 border-2 border-[#CCFF00] border-t-transparent rounded-full animate-spin"></div>
-                  : <Camera className="w-6 h-6 text-[#CCFF00]" />}
               </div>
-              {/* Remove X button — shown only when photo exists */}
-              {photoUrl && (
-                <button
-                  onClick={handleRemovePhoto}
-                  className="absolute -top-1 -right-1 w-6 h-6 bg-[#EF4444] hover:bg-red-600 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-lg"
-                  title="Remove photo"
-                >
-                  <X className="w-3 h-3 text-white" />
-                </button>
-              )}
             </div>
 
             <div>
-              <h2 className="text-xl font-black font-display text-white uppercase tracking-wider">{client.name}</h2>
+              <h2 className="text-xl font-black font-display text-white uppercase tracking-wider flex items-center justify-center gap-2">
+                <span>{client.name}</span>
+              </h2>
               <p className="text-slate-400 font-mono text-xs mt-0.5">{client.client_code}</p>
             </div>
-            {activeSub
-              ? <StatusBadge status={activeSub.status} />
+            {profileStatus
+              ? <StatusBadge status={profileStatus} />
               : <StatusBadge status={null} />}
-            <p className="text-[10px] text-slate-600 font-bold uppercase tracking-widest">Click photo to change</p>
+            {isBirthdayToday(client.date_of_birth) && (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-400/10 border border-amber-400/30 rounded-full animate-pulse">
+                <span className="text-base leading-none">🎉</span>
+                <span className="text-[10px] font-bold uppercase tracking-widest text-amber-400">
+                  Celebrating Birthday Today
+                </span>
+              </div>
+            )}
+            <p className="text-[10px] text-slate-500 font-medium uppercase tracking-widest">
+              {photoUrl && !photoBroken ? 'Click image to expand preview' : 'Click container to select photo'}
+            </p>
+            {profileStatus === 'frozen' && (activeSub?.freeze_reason || client.freeze_reason) && (
+              <div className="w-full mt-2 p-3 rounded-xl bg-sky-500/10 border border-sky-500/30 text-left">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-sky-400 mb-1">Freeze Reason</p>
+                <p className="text-sm text-sky-100">{activeSub?.freeze_reason || client.freeze_reason}</p>
+                {activeSub?.freeze_mode === 'timed' && activeSub?.freeze_end_date && (
+                  <p className="text-xs text-sky-300/80 mt-1">Auto-unfreeze: {formatDateDDMMYYYY(activeSub.freeze_end_date)}</p>
+                )}
+                {activeSub?.freeze_mode === 'indefinite' && (
+                  <p className="text-xs text-sky-300/80 mt-1">Indefinite — manual unfreeze required</p>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Personal Details */}
           <div className="card p-5 space-y-3">
             <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-3">Personal Details</h3>
             {[
-              { icon: <Phone className="w-4 h-4" />, label: 'Phone', value: client.phone },
-              { icon: <Calendar className="w-4 h-4" />, label: 'Date of Birth', value: client.date_of_birth ? `${client.date_of_birth}${age ? ` (${age}y)` : ''}` : null },
+              { icon: <Phone className="w-4 h-4" />, label: 'Phone', value: client.phone, isPhone: true },
+              { icon: <Calendar className="w-4 h-4" />, label: 'Date of Birth', value: client.date_of_birth ? `${formatDateDDMMYYYY(client.date_of_birth)}${age ? ` (${age}y)` : ''}` : null },
               { icon: <MapPin className="w-4 h-4" />, label: 'Area', value: client.area },
               { icon: <Scale className="w-4 h-4" />, label: 'Weight', value: client.weight_kg ? `${client.weight_kg} kg` : null },
               { icon: <Activity className="w-4 h-4" />, label: 'Height', value: client.height_cm ? `${client.height_cm} cm` : null },
               { icon: <Activity className="w-4 h-4" />, label: 'Other Sports', value: client.other_sports },
-            ].map(({ icon, label, value }) => value ? (
+            ].map(({ icon, label, value, isPhone }) => value ? (
               <div key={label} className="flex items-start gap-3 text-sm">
                 <span className="text-slate-500 mt-0.5 flex-shrink-0">{icon}</span>
-                <div>
+                <div className="flex-1 min-w-0">
                   <p className="text-slate-400 text-xs">{label}</p>
-                  <p className="text-white font-medium">{value}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-white font-medium">{value}</p>
+                    {isPhone && (
+                      <div className="flex items-center gap-1.5 flex-shrink-0">
+                        <WhatsAppContextualButtons client={client} size="sm" />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             ) : null)}
@@ -638,7 +766,7 @@ const ClientProfile = () => {
                 <div>
                   <p className="text-slate-400 text-xs mb-1">Active Subscription</p>
                   <p className="text-white text-lg font-black font-display uppercase tracking-wider">{activeSub.package_title || 'Package'}</p>
-                  <p className="text-slate-400 text-sm mt-1 font-mono">{activeSub.start_date} → {activeSub.end_date}</p>
+                  <p className="text-slate-400 text-sm mt-1 font-mono">{formatDateDDMMYYYY(activeSub.start_date)} → {formatDateDDMMYYYY(activeSub.end_date)}</p>
                 </div>
                 <div className="flex items-center gap-3">
                   <div className="text-right">
@@ -650,23 +778,37 @@ const ClientProfile = () => {
               </div>
 
               {/* Freeze/Unfreeze */}
-              <div className="flex gap-2 mt-4 border-t border-[#222B3D] pt-4">
-                {activeSub.status === 'active' && (
-                  <button
-                    onClick={() => { setFreezeReason(''); setFreezeError(''); setShowFreezeModal(true); }}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/20 text-sky-400 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors"
-                  >
-                    <Snowflake className="w-4 h-4" /> Freeze Membership
-                  </button>
+              <div className="flex flex-col gap-3 mt-4 border-t border-[#222B3D] pt-4">
+                {activeSub.status === 'frozen' && activeSub.freeze_reason && (
+                  <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/30">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-sky-400 mb-1">Freeze Reason</p>
+                    <p className="text-sm text-sky-100">{activeSub.freeze_reason}</p>
+                  </div>
                 )}
-                {activeSub.status === 'frozen' && (
-                  <button
-                    onClick={handleUnfreeze}
-                    className="flex items-center gap-2 px-4 py-2.5 bg-[#CCFF00]/10 hover:bg-emerald-500/20 border border-[#CCFF00]/20 text-[#CCFF00] rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors"
-                  >
-                    <Sun className="w-4 h-4" /> Unfreeze Membership
-                  </button>
-                )}
+                <div className="flex gap-2">
+                  {activeSub.status === 'active' && (
+                    <button
+                      onClick={() => {
+                        setFreezeReason('');
+                        setFreezeMode('timed');
+                        setFreezeDays('7');
+                        setFreezeError('');
+                        setShowFreezeModal(true);
+                      }}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-[#CCFF00]/10 hover:bg-[#CCFF00]/20 border border-[#CCFF00]/30 text-[#CCFF00] rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors"
+                    >
+                      <Snowflake className="w-4 h-4" /> Freeze Membership
+                    </button>
+                  )}
+                  {activeSub.status === 'frozen' && (
+                    <button
+                      onClick={handleUnfreeze}
+                      className="flex items-center gap-2 px-4 py-2.5 bg-[#CCFF00]/10 hover:bg-emerald-500/20 border border-[#CCFF00]/20 text-[#CCFF00] rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors"
+                    >
+                      <Sun className="w-4 h-4" /> Unfreeze Membership
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -706,8 +848,8 @@ const ClientProfile = () => {
                     {client.subscriptionHistory?.length > 0 ? client.subscriptionHistory.map(sub => (
                       <tr key={sub.id} className="hover:bg-[#121721]/20 transition-colors">
                         <td className="px-5 py-3.5 font-medium text-white">{sub.package_title || '—'}</td>
-                        <td className="px-5 py-3.5 text-slate-300 font-mono">{sub.start_date}</td>
-                        <td className="px-5 py-3.5 text-slate-300 font-mono">{sub.end_date}</td>
+                        <td className="px-5 py-3.5 text-slate-300 font-mono">{formatDateDDMMYYYY(sub.start_date)}</td>
+                        <td className="px-5 py-3.5 text-slate-300 font-mono">{formatDateDDMMYYYY(sub.end_date)}</td>
                         <td className="px-5 py-3.5 text-[#CCFF00] font-semibold">{sub.price} EGP</td>
                         <td className="px-5 py-3.5"><StatusBadge status={sub.status} /></td>
                       </tr>
@@ -742,7 +884,7 @@ const ClientProfile = () => {
                         <td className="px-5 py-3.5">
                           <span className="px-2 py-0.5 rounded-xl text-xs bg-[#181E2A] text-slate-300 capitalize">{pay.type}</span>
                         </td>
-                        <td className="px-5 py-3.5 text-slate-300 font-mono text-xs">{pay.paid_at ? pay.paid_at.split(' ')[0] : '—'}</td>
+                        <td className="px-5 py-3.5 text-slate-300 font-mono text-xs">{formatDateDDMMYYYY(pay.paid_at) || '—'}</td>
                         <td className="px-5 py-3.5 text-right">
                           <button
                             onClick={() => handleReprintPayment(pay)}
@@ -789,7 +931,7 @@ const ClientProfile = () => {
                         const diff = prev ? (log.weight_kg - prev.weight_kg).toFixed(1) : null;
                         return (
                           <tr key={log.id} className="hover:bg-[#121721]/20 transition-colors">
-                            <td className="px-5 py-3.5 text-slate-300 font-mono text-xs">{log.logged_at?.split(' ')[0]}</td>
+                            <td className="px-5 py-3.5 text-slate-300 font-mono text-xs">{formatDateDDMMYYYY(log.logged_at)}</td>
                             <td className="px-5 py-3.5 font-bold text-white">{log.weight_kg} kg</td>
                             <td className="px-5 py-3.5">
                               {diff !== null ? (
@@ -833,7 +975,11 @@ const ClientProfile = () => {
           client={client}
           packages={packages}
           onClose={() => setShowEditModal(false)}
-          onSaved={() => { setShowEditModal(false); fetchClient(); }}
+          onSaved={async () => {
+            setShowEditModal(false);
+            await fetchClient();
+            window.dispatchEvent(new Event('dashboard-refresh'));
+          }}
         />
       )}
 
@@ -843,7 +989,11 @@ const ClientProfile = () => {
           packages={packages}
           isRenew={!!activeSub}
           onClose={() => setShowSubModal(false)}
-          onSaved={() => { setShowSubModal(false); fetchClient(); }}
+          onSaved={() => {
+            setShowSubModal(false);
+            window.dispatchEvent(new Event('dashboard-refresh'));
+            fetchClient();
+          }}
         />
       )}
 
@@ -858,25 +1008,140 @@ const ClientProfile = () => {
       {/* Freeze Modal */}
       {showFreezeModal && (
         <div className="fixed inset-0 bg-[#0B0E14]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-          <div className="bg-[#1E293B] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-md flex flex-col">
+          <div className="bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-md flex flex-col">
             <div className="px-6 py-4 border-b border-[#222B3D] flex justify-between items-center">
-              <h3 className="text-lg font-black font-display uppercase tracking-wider text-white flex items-center gap-2"><Snowflake className="w-5 h-5 text-sky-400" />Freeze Membership</h3>
+              <h3 className="text-lg font-black font-display uppercase tracking-wider text-white flex items-center gap-2"><Snowflake className="w-5 h-5 text-[#CCFF00]" />Freeze Membership</h3>
               <button onClick={() => setShowFreezeModal(false)} className="p-1.5 text-slate-400 hover:text-white hover:bg-[#181E2A] rounded-xl transition-colors"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-6 space-y-4">
               {freezeError && <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl text-sm">{freezeError}</div>}
-              <p className="text-slate-300 text-sm">Freezing pauses the subscription end date until unfrozen.</p>
+
+              <div className="space-y-2">
+                <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Freeze Mode</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setFreezeMode('timed')}
+                    className={`px-3 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider border transition-colors ${
+                      freezeMode === 'timed'
+                        ? 'bg-[#CCFF00]/15 border-[#CCFF00] text-[#CCFF00]'
+                        : 'bg-[#0B0E14] border-[#222B3D] text-slate-400'
+                    }`}
+                  >
+                    Timed (Days)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setFreezeMode('indefinite')}
+                    className={`px-3 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider border transition-colors ${
+                      freezeMode === 'indefinite'
+                        ? 'bg-[#CCFF00]/15 border-[#CCFF00] text-[#CCFF00]'
+                        : 'bg-[#0B0E14] border-[#222B3D] text-slate-400'
+                    }`}
+                  >
+                    Indefinite
+                  </button>
+                </div>
+                <p className="text-slate-400 text-xs">
+                  {freezeMode === 'timed'
+                    ? 'End date extends by actual days frozen (capped to N). Auto-unfreezes when the freeze period ends.'
+                    : 'Frozen until staff manually clicks Unfreeze. End date extends by days elapsed.'}
+                </p>
+              </div>
+
+              {freezeMode === 'timed' && (
+                <div className="space-y-1.5">
+                  <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Freeze Days</label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={freezeDays}
+                    onChange={e => setFreezeDays(e.target.value)}
+                    className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors"
+                    placeholder="7"
+                  />
+                </div>
+              )}
+
               <div className="space-y-1.5">
-                <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Reason (optional)</label>
+                <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Reason</label>
                 <textarea rows={2} value={freezeReason} onChange={e => setFreezeReason(e.target.value)} placeholder="Medical, Travel, etc."
-                  className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-sky-500 transition-colors resize-none" />
+                  className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors resize-none" />
               </div>
             </div>
-            <div className="px-6 py-4 border-t border-[#222B3D] bg-[#121721]/40 flex justify-end gap-3">
+            <div className="px-6 py-4 border-t border-[#222B3D] bg-[#0B0E14] flex justify-end gap-3">
               <button onClick={() => setShowFreezeModal(false)} className="px-4 py-2.5 bg-[#181E2A] hover:bg-slate-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors">Cancel</button>
-              <button onClick={handleFreeze} disabled={freezing} className="flex items-center gap-2 px-5 py-2 bg-sky-500 hover:bg-sky-600 disabled:opacity-60 text-black rounded-xl text-sm font-semibold transition-colors">
+              <button onClick={handleFreeze} disabled={freezing} className="flex items-center gap-2 px-5 py-2 bg-[#CCFF00] hover:bg-[#b5e600] disabled:opacity-60 text-black font-bold rounded-xl text-sm transition-colors">
                 <Snowflake className="w-4 h-4" />{freezing ? 'Freezing…' : 'Freeze Membership'}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── IMAGE PREVIEW LIGHTBOX MODAL ── */}
+      {showImageModal && photoUrl && !photoBroken && (
+        <div
+          className="fixed inset-0 bg-black/85 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setShowImageModal(false)}
+        >
+          <div
+            className="relative max-w-4xl max-h-[90vh] bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl overflow-hidden flex flex-col w-full"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-[#222B3D] flex justify-between items-center bg-[#0B0E14]/80">
+              <h3 className="text-sm font-bold text-white uppercase tracking-wider flex items-center gap-2 font-display">
+                <User className="w-4 h-4 text-[#CCFF00]" />
+                {client.name} — Profile Photo
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowImageModal(false)}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-[#181E2A] rounded-xl transition-colors"
+                title="Close"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Photo Container */}
+            <div className="p-6 flex items-center justify-center bg-[#0B0E14] overflow-auto max-h-[70vh]">
+              <img
+                src={photoUrl}
+                alt={client.name}
+                className="max-w-full max-h-[65vh] rounded-2xl border border-[#222B3D] object-contain shadow-2xl"
+              />
+            </div>
+
+            {/* Action Bar */}
+            <div className="px-6 py-4 border-t border-[#222B3D] bg-[#0B0E14]/80 flex justify-between items-center">
+              <button
+                type="button"
+                onClick={handleDeletePhoto}
+                className="flex items-center gap-2 px-4 py-2 bg-red-500/10 hover:bg-red-500/20 text-red-400 hover:text-red-300 border border-red-500/30 rounded-xl transition-colors font-bold text-xs uppercase tracking-wider"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Delete Photo</span>
+              </button>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={triggerFileInput}
+                  className="flex items-center gap-2 px-4 py-2 bg-[#181E2A] hover:bg-[#222B3D] text-[#CCFF00] hover:text-[#b8e600] rounded-xl transition-colors font-bold text-xs uppercase tracking-wider border border-[#222B3D]"
+                >
+                  <Camera className="w-4 h-4" />
+                  <span>Change Photo</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowImageModal(false)}
+                  className="px-4 py-2 bg-[#181E2A] hover:bg-slate-700 text-white rounded-xl transition-colors font-bold text-xs uppercase tracking-wider border border-[#222B3D]"
+                >
+                  Close
+                </button>
+              </div>
             </div>
           </div>
         </div>

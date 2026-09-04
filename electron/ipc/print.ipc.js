@@ -2,6 +2,7 @@ const { ipcMain, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const db = require('../db');
+const { formatDateDDMMYYYY } = require('../utils/dateFormat');
 
 function calcAge(birthDate) {
   if (!birthDate) return '';
@@ -37,7 +38,7 @@ ipcMain.handle('print:receipt', async (event, data) => {
       try {
         const payRow = db.prepare(`
           SELECT p.*, s.start_date as sub_start, s.end_date as sub_end, pkg.title as pkg_title,
-                 c.id as c_id, c.name as c_name, c.phone as c_phone, c.birth_date as c_dob,
+                 c.id as c_id, c.name as c_name, c.phone as c_phone, c.date_of_birth as c_dob,
                  c.weight_kg as c_weight, c.area as c_area, c.client_code as c_code
           FROM payments p
           LEFT JOIN subscriptions s ON p.subscription_id = s.id
@@ -71,7 +72,7 @@ ipcMain.handle('print:receipt', async (event, data) => {
         if (clientRow) {
           if (!client_name) client_name = clientRow.name;
           if (!client_phone) client_phone = clientRow.phone;
-          if (!client_age && clientRow.birth_date) client_age = calcAge(clientRow.birth_date);
+          if (!client_age && clientRow.date_of_birth) client_age = calcAge(clientRow.date_of_birth);
           if (!client_weight && clientRow.weight_kg) client_weight = clientRow.weight_kg;
           if (!client_area && clientRow.area) client_area = clientRow.area;
           if (!client_code && clientRow.client_code) client_code = clientRow.client_code;
@@ -109,7 +110,7 @@ ipcMain.handle('print:receipt', async (event, data) => {
     const templatePath = path.join(__dirname, '../../bill/bill.html');
     let htmlContent = fs.readFileSync(templatePath, 'utf-8');
 
-    // Replace dynamic placeholders inside bill.html
+    // Replace dynamic placeholders inside bill.html — dates as DD/MM/YYYY
     const replacements = {
       '{{LOGO_BASE64}}':    logoDataUri,
       '{{CLIENT_NAME}}':    client_name,
@@ -119,11 +120,11 @@ ipcMain.handle('print:receipt', async (event, data) => {
       '{{CLIENT_AREA}}':    client_area,
       '{{CLIENT_CODE}}':    client_code,
       '{{PACKAGE_NAME}}':   package_name,
-      '{{START_DATE}}':     start_date,
-      '{{END_DATE}}':       end_date,
+      '{{START_DATE}}':     formatDateDDMMYYYY(start_date) || start_date,
+      '{{END_DATE}}':       end_date === '—' ? '—' : (formatDateDDMMYYYY(end_date) || end_date),
       '{{AMOUNT_PAID}}':    `${paid.toFixed(2)}`,
       '{{AMOUNT_RESIDUAL}}': residual,
-      '{{PAYMENT_DATE}}':   payment_date,
+      '{{PAYMENT_DATE}}':   formatDateDDMMYYYY(payment_date) || payment_date,
       '{{TRANSACTION_ID}}': String(payment_id),
     };
 

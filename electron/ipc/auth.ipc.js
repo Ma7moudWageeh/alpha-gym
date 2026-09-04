@@ -4,6 +4,10 @@ const db = require('../db');
 
 const SALT_ROUNDS = 12;
 
+function getUserPinHash(user) {
+  return user.security_pin || user.master_pin || null;
+}
+
 ipcMain.handle('auth:checkOwnerExists', async () => {
   try {
     const row = db.prepare("SELECT COUNT(*) AS count FROM users WHERE role = 'owner'").get();
@@ -24,11 +28,11 @@ ipcMain.handle('auth:setupOwner', async (event, { fullName, username, password, 
     const pinHash = bcrypt.hashSync(masterPin, SALT_ROUNDS);
 
     const insert = db.prepare(`
-      INSERT INTO users (full_name, username, password, role, master_pin)
-      VALUES (?, ?, ?, 'owner', ?)
+      INSERT INTO users (full_name, username, password, role, master_pin, security_pin)
+      VALUES (?, ?, ?, 'owner', ?, ?)
     `);
-    
-    insert.run(fullName, username, passwordHash, pinHash);
+
+    insert.run(fullName, username, passwordHash, pinHash, pinHash);
     return { success: true };
   } catch (err) {
     return { error: err.message };
@@ -68,7 +72,12 @@ ipcMain.handle('auth:verifyPin', async (event, { pin }) => {
       return { error: 'Owner not found.' };
     }
 
-    const isValid = bcrypt.compareSync(pin, owner.master_pin);
+    const pinHash = getUserPinHash(owner);
+    if (!pinHash) {
+      return { error: 'Security PIN not configured.' };
+    }
+
+    const isValid = bcrypt.compareSync(pin, pinHash);
     if (!isValid) {
       return { error: 'Invalid PIN.' };
     }
@@ -79,27 +88,62 @@ ipcMain.handle('auth:verifyPin', async (event, { pin }) => {
   }
 });
 
+ipcMain.handle('auth:verifyCredentialsPin', async (event, { username, pin }) => {
+  try {
+    if (!username || !pin) {
+      return { error: 'Username and Security PIN are required.' };
+    }
+
+    const user = db.prepare('SELECT id, username, security_pin, master_pin FROM users WHERE username = ?').get(username);
+    if (!user) {
+      return { error: 'Invalid username or Security PIN.' };
+    }
+
+    const pinHash = getUserPinHash(user);
+    if (!pinHash) {
+      return { error: 'Security PIN not configured for this account.' };
+    }
+
+    const isValid = bcrypt.compareSync(pin, pinHash);
+    if (!isValid) {
+      return { error: 'Invalid username or Security PIN.' };
+    }
+
+    return { success: true, userId: user.id, username: user.username };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 ipcMain.handle('auth:resetPassword', async (event, { username, newPassword, pin }) => {
   try {
-    const owner = db.prepare("SELECT * FROM users WHERE role = 'owner' LIMIT 1").get();
-    if (!owner) {
-      return { error: 'Owner not found.' };
-    }
-
-    const isValidPin = bcrypt.compareSync(pin, owner.master_pin);
-    if (!isValidPin) {
-      return { error: 'Invalid PIN.' };
-    }
-
     const user = db.prepare('SELECT * FROM users WHERE username = ?').get(username);
     if (!user) {
       return { error: 'User not found.' };
     }
 
+    const pinHash = getUserPinHash(user);
+    if (!pinHash) {
+      return { error: 'Security PIN not configured for this account.' };
+    }
+
+    const isValidPin = bcrypt.compareSync(pin, pinHash);
+    if (!isValidPin) {
+      return { error: 'Invalid PIN.' };
+    }
+
     const passwordHash = bcrypt.hashSync(newPassword, SALT_ROUNDS);
     db.prepare('UPDATE users SET password = ? WHERE username = ?').run(passwordHash, username);
 
-    return { success: true };
+    return {
+      success: true,
+      user: {
+        id: user.id,
+        fullName: user.full_name,
+        username: user.username,
+        role: user.role
+      }
+    };
   } catch (err) {
     return { error: err.message };
   }

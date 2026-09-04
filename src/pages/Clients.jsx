@@ -4,8 +4,12 @@ import { AuthContext } from '../context/AuthContext';
 import {
   Search, Plus, Edit2, Trash2, User, X, Printer,
   ChevronRight, Calendar, AlertCircle, CheckSquare, Square,
-  Users, Activity, Snowflake
+  Users, Activity, Snowflake, MessageCircle
 } from 'lucide-react';
+import { formatDateDDMMYYYY, getAvatarGlowClass } from '../utils/dateFormat';
+import DateInput from '../components/DateInput';
+import { openClientWhatsApp } from '../utils/whatsapp';
+import { WhatsAppContextualButtons } from '../components/common/WhatsAppButton';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 function addDays(dateStr, days) {
@@ -35,9 +39,40 @@ const EMPTY_SUB_FORM = {
   price: '', note: '',
 };
 
+function getInitials(name) {
+  if (!name) return '??';
+  const parts = name.trim().split(' ');
+  if (parts.length > 1) return (parts[0][0] + parts[1][0]).toUpperCase();
+  return name.substring(0, 2).toUpperCase();
+}
+
+function ClientAvatar({ client, name }) {
+  const [broken, setBroken] = useState(false);
+  const photoUrl = client?.profile_photo_url || client?.photoUrl || client?.photo_url;
+  const initials = getInitials(name || client?.full_name || client?.name);
+  const glowClass = getAvatarGlowClass(client);
+
+  return (
+    <div
+      className={`relative w-10 h-10 rounded-xl flex items-center justify-center font-bold text-sm transition-all duration-300 ${glowClass} bg-slate-900/80 text-lime-400 select-none mr-3 flex-shrink-0`}
+    >
+      {photoUrl && !broken ? (
+        <img
+          src={photoUrl}
+          alt={name || client?.name}
+          className="w-full h-full object-cover rounded-xl"
+          onError={() => setBroken(true)}
+        />
+      ) : (
+        <span>{initials}</span>
+      )}
+    </div>
+  );
+}
+
 // ─── status badge ──────────────────────────────────────────────────────────────
 const getStatusBadge = (status) => {
-  switch (status) {
+  switch (status?.toLowerCase()) {
     case 'active':
       return (
         <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-[#CCFF00]/10 text-[#CCFF00] border border-[#CCFF00]/30">
@@ -52,8 +87,14 @@ const getStatusBadge = (status) => {
       );
     case 'frozen':
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-[#8B5CF6]/10 text-[#8B5CF6] border border-[#8B5CF6]/30">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#8B5CF6] mr-1.5"></span> FROZEN
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-sky-500/10 text-sky-400 border border-sky-500/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-sky-400 mr-1.5"></span> FROZEN
+        </span>
+      );
+    case 'inactive':
+      return (
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-slate-800 text-slate-400 border border-slate-700">
+          <span className="w-1.5 h-1.5 rounded-full bg-slate-500 mr-1.5"></span> INACTIVE
         </span>
       );
     default:
@@ -74,6 +115,7 @@ const Clients = () => {
 
   const [clients, setClients] = useState([]);
   const [totalClients, setTotalClients] = useState(0);
+  const [statusCounts, setStatusCounts] = useState({ all: 0, active: 0, frozen: 0, expired: 0 });
   const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -94,17 +136,36 @@ const Clients = () => {
   const [subFormData, setSubFormData] = useState(EMPTY_SUB_FORM);
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [newlyCreatedClient, setNewlyCreatedClient] = useState(null); // for post-create WA welcome
 
   // ── fetch ──────────────────────────────────────────────────────────────────
+  const fetchStats = async () => {
+    if (window.electronAPI?.clients?.getStats) {
+      const res = await window.electronAPI.clients.getStats();
+      if (res?.success && res.counts) {
+        setStatusCounts(res.counts);
+        if (res.total !== undefined) {
+          setTotalClients(res.total);
+        }
+      }
+    }
+  };
+
   const fetchClients = async () => {
     setLoading(true);
+    // Always fetch full roster (status=all) so KPI counts stay accurate;
+    // Expired filter applies the 30-day window client-side / via days_since_expiry.
     const result = await window.electronAPI.clients.getAll({ search: searchQuery, status: 'all' });
     if (result.success) {
       setClients(result.clients);
       if (result.totalCount !== undefined) {
         setTotalClients(result.totalCount);
       }
+      if (result.counts) {
+        setStatusCounts(result.counts);
+      }
     }
+    await fetchStats();
     setLoading(false);
   };
 
@@ -117,23 +178,64 @@ const Clients = () => {
 
   useEffect(() => {
     window.addEventListener('focus', fetchClients);
-    return () => window.removeEventListener('focus', fetchClients);
-  }, [fetchClients]);
+    window.addEventListener('dashboard-refresh', fetchClients);
+    return () => {
+      window.removeEventListener('focus', fetchClients);
+      window.removeEventListener('dashboard-refresh', fetchClients);
+    };
+  }, [searchQuery]);
 
   useEffect(() => {
     const id = setTimeout(fetchClients, 300);
     return () => clearTimeout(id);
   }, [searchQuery]);
 
-  const filteredClients = clients.filter(c => {
-    if (statusFilter === 'all') return true;
-    return c.sub_status === statusFilter;
+  const filteredClients = clients.filter((client) => {
+    const daysLeft = client.days_left !== undefined && client.days_left !== null
+      ? Number(client.days_left)
+      : client.days_remaining !== undefined && client.days_remaining !== null
+        ? Number(client.days_remaining)
+        : null;
+
+    const compStatus = String(client.computed_status ?? '').toUpperCase();
+    const subStatus = String(client.sub_status ?? client.status ?? '').toLowerCase();
+
+    if (statusFilter === 'expired') {
+      // Must be overdue AND within the 30-day threshold
+      if (daysLeft !== null) {
+        return daysLeft <= 0 && daysLeft >= -30;
+      }
+      return compStatus === 'EXPIRED' || subStatus === 'expired';
+    }
+
+    if (statusFilter === 'all') {
+      // Retains all clients regardless of how long ago they expired
+      return true;
+    }
+
+    if (statusFilter === 'active') {
+      return subStatus === 'active' || compStatus === 'ACTIVE';
+    }
+    if (statusFilter === 'frozen') {
+      return subStatus === 'frozen' || compStatus === 'FROZEN';
+    }
+    return subStatus === statusFilter;
   });
 
-  const totalCount = clients.length;
-  const activeCount = clients.filter(c => c.sub_status === 'active').length;
-  const frozenCount = clients.filter(c => c.sub_status === 'frozen').length;
-  const expiredCount = clients.filter(c => c.sub_status === 'expired').length;
+  const expiredWithin30DaysCount = clients.filter((c) => {
+    const days = Number(c.days_left ?? c.days_remaining);
+    if (!Number.isNaN(days) && c.days_left !== null && c.days_left !== undefined) {
+      return days <= 0 && days >= -30;
+    }
+    const compStatus = String(c.computed_status ?? '').toUpperCase();
+    const subStatus = String(c.sub_status ?? c.status ?? '').toLowerCase();
+    return compStatus === 'EXPIRED' || subStatus === 'expired';
+  }).length;
+
+  const totalCount = statusCounts.all || totalClients;
+  const activeCount = statusCounts.active || 0;
+  const frozenCount = statusCounts.frozen || 0;
+  const expiredCount = expiredWithin30DaysCount || statusCounts.expired || 0;
 
   // ── computed end-date preview ───────────────────────────────────────────────
   const endDatePreview = (() => {
@@ -223,8 +325,12 @@ const Clients = () => {
           notes: clientFormData.notes || null,
         });
         if (res.error) { setFormError(res.error); return; }
+        await fetchClients();
+        if (typeof fetchStats === 'function') {
+          await fetchStats();
+        }
+        window.dispatchEvent(new Event('dashboard-refresh'));
         setIsFormModalOpen(false);
-        fetchClients();
         return;
       }
 
@@ -282,8 +388,25 @@ const Clients = () => {
         });
       }
 
+      // Immediately re-fetch full client list and refreshed stats BEFORE closing modal
+      await fetchClients();
+      if (typeof fetchStats === 'function') {
+        await fetchStats();
+      }
+      window.dispatchEvent(new Event('dashboard-refresh'));
       setIsFormModalOpen(false);
-      fetchClients();
+
+      // Capture newly created client; detect if the subscription is already expired
+      const subAlreadyExpired = addInitialMembership && subFormData.start_date
+        ? new Date(subFormData.start_date) < new Date(new Date().toISOString().split('T')[0])
+        : false;
+      setNewlyCreatedClient({
+        id: clientId,
+        name: clientFormData.name,
+        phone: clientFormData.phone,
+        client_code: clientCode,
+        sub_status: subAlreadyExpired ? 'expired' : 'active',
+      });
     } finally {
       setSubmitting(false);
     }
@@ -295,25 +418,67 @@ const Clients = () => {
     if (!isOwner) return;
     if (!window.confirm('Delete this client permanently? All their records will be removed.')) return;
     const res = await window.electronAPI.clients.delete({ id, userRole: user.role });
-    if (res.success) fetchClients();
-    else alert(res.error || 'Failed to delete client');
-  };
-
-  // Helper to extract initials
-  const getInitials = (name) => {
-    if (!name) return '??';
-    const parts = name.trim().split(' ');
-    if (parts.length > 1) return (parts[0][0] + parts[1][0]).toUpperCase();
-    return name.substring(0, 2).toUpperCase();
+    if (res.success) {
+      await fetchClients();
+      if (typeof fetchStats === 'function') {
+        await fetchStats();
+      }
+      window.dispatchEvent(new Event('dashboard-refresh'));
+    } else {
+      alert(res.error || 'Failed to delete client');
+    }
   };
 
   // ──────────────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-6">
+      {/* Post-create WhatsApp welcome banner */}
+      {newlyCreatedClient && (
+        <div className={`flex items-center justify-between p-4 border rounded-xl text-sm ${
+          newlyCreatedClient.sub_status === 'expired'
+            ? 'bg-rose-500/10 border-rose-500/30'
+            : 'bg-emerald-500/10 border-emerald-500/30'
+        }`}>
+          <div className={`flex items-center gap-2 ${
+            newlyCreatedClient.sub_status === 'expired' ? 'text-rose-400' : 'text-emerald-400'
+          }`}>
+            <MessageCircle className="w-4 h-4 flex-shrink-0" />
+            <span>
+              <span className="font-bold">{newlyCreatedClient.name}</span> was added successfully.
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            {newlyCreatedClient.phone && (
+              <button
+                onClick={() => openClientWhatsApp({
+                  client: newlyCreatedClient,
+                  contextOverride: newlyCreatedClient.sub_status === 'expired' ? 'EXPIRED' : 'WELCOME',
+                })}
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-white text-xs font-bold rounded-lg transition-colors ${
+                  newlyCreatedClient.sub_status === 'expired'
+                    ? 'bg-rose-500 hover:bg-rose-600'
+                    : 'bg-[#25D366] hover:bg-[#1da854]'
+                }`}
+              >
+                <MessageCircle className="w-3.5 h-3.5" />
+                {newlyCreatedClient.sub_status === 'expired'
+                  ? 'Send Expired Notice via WhatsApp'
+                  : 'Send Welcome Message via WhatsApp'}
+              </button>
+            )}
+            <button
+              onClick={() => setNewlyCreatedClient(null)}
+              className="p-1 text-slate-400 hover:text-white transition-colors"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
       {/* Page header */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h1 className="text-3xl font-black font-display text-white uppercase tracking-wider">Client Directory</h1>
+          <h1 className="text-3xl font-black font-display text-white uppercase tracking-wider">Clients</h1>
           <p className="text-slate-400 mt-1 uppercase tracking-widest text-xs font-bold">Total registered athletes: {totalClients}</p>
         </div>
         <button
@@ -331,7 +496,7 @@ const Clients = () => {
           className={`card p-5 bg-[#121721] border ${statusFilter === 'all' ? 'border-slate-400' : 'border-[#222B3D] hover:border-slate-600'} cursor-pointer transition-colors`}
         >
           <div className="flex justify-between items-start">
-            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">Total Clients</p>
+            <p className="text-xs font-bold uppercase tracking-widest text-slate-400">All Clients</p>
             <Users className="w-4 h-4 text-slate-500" />
           </div>
           <h3 className="text-3xl font-black font-display text-white mt-2">{totalCount}</h3>
@@ -365,13 +530,13 @@ const Clients = () => {
 
         <div 
           onClick={() => setStatusFilter('frozen')}
-          className={`card p-5 bg-[#121721] border ${statusFilter === 'frozen' ? 'border-sky-500 bg-sky-500/10' : 'border-[#222B3D] hover:border-sky-500/50'} cursor-pointer transition-colors`}
+          className={`card p-5 bg-[#121721] border ${statusFilter === 'frozen' ? 'border-sky-500' : 'border-[#222B3D] hover:border-sky-500/50'} cursor-pointer transition-colors`}
         >
           <div className="flex justify-between items-start">
             <p className={`text-xs font-bold uppercase tracking-widest ${statusFilter === 'frozen' ? 'text-sky-400' : 'text-slate-400'}`}>Frozen</p>
             <Snowflake className={`w-4 h-4 ${statusFilter === 'frozen' ? 'text-sky-400' : 'text-slate-500'}`} />
           </div>
-          <h3 className={`text-3xl font-black font-display mt-2 ${statusFilter === 'frozen' ? 'text-sky-400' : 'text-[#8B5CF6]'}`}>
+          <h3 className="text-3xl font-black font-display mt-2 text-sky-400">
             {frozenCount}
           </h3>
         </div>
@@ -379,7 +544,7 @@ const Clients = () => {
 
       {/* Table card */}
       <div className="card overflow-hidden bg-[#121721] border border-[#222B3D] flex flex-col min-h-[500px]">
-        {/* Search & Filters */}
+        {/* Search */}
         <div className="p-5 border-b border-[#222B3D] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="relative max-w-md w-full">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -393,18 +558,9 @@ const Clients = () => {
               className="w-full pl-9 pr-4 py-2 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white text-sm focus:border-[#CCFF00] outline-none transition-colors"
             />
           </div>
-
-          <div className="flex space-x-1 bg-[#0B0E14] p-1 rounded border border-[#222B3D]">
-            {['all', 'active', 'expired', 'frozen'].map(s => (
-              <button
-                key={s}
-                onClick={() => setStatusFilter(s)}
-                className={`px-4 py-1.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all ${
-                  statusFilter === s ? 'bg-[#181E2A] text-[#CCFF00] shadow-sm' : 'text-slate-500 hover:text-slate-300'
-                }`}
-              >{s}</button>
-            ))}
-          </div>
+          <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
+            Showing {filteredClients.length} · Filter: {statusFilter}
+          </p>
         </div>
 
         {loading ? (
@@ -431,29 +587,25 @@ const Clients = () => {
                     <td className="px-6 py-4 text-slate-500 font-mono text-xs">{client.client_code}</td>
                     <td className="px-6 py-4">
                       <div className="flex items-center">
-                        {client.profile_photo_url ? (
-                          <img
-                            src={client.profile_photo_url}
-                            alt={client.name}
-                            className="w-10 h-10 rounded-xl object-cover border border-[#222B3D] mr-3"
-                          />
-                        ) : (
-                          <div className="w-10 h-10 rounded-xl bg-[#181E2A] border border-[#222B3D] text-[#8B5CF6] flex items-center justify-center mr-3 font-bold text-xs uppercase tracking-wider">
-                            {getInitials(client.name)}
-                          </div>
-                        )}
-                        <span className="font-bold text-white text-sm">{client.name}</span>
+                        <ClientAvatar client={client} />
+                        <span className="font-bold text-white text-sm">
+                          {client.name}
+                        </span>
                       </div>
                     </td>
                     <td className="px-6 py-4 text-slate-400 text-xs font-mono">{client.phone}</td>
                     <td className="px-6 py-4">{getStatusBadge(client.sub_status)}</td>
                     <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center justify-end space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="flex items-center justify-end gap-1">
+                        <WhatsAppContextualButtons client={client} size="md" />
+
                         <button
                           onClick={(e) => { e.stopPropagation(); openFormModal(client); }}
-                          className="p-1.5 text-slate-400 hover:text-white hover:bg-[#222B3D] rounded-xl transition-colors"
+                          className="p-1.5 text-slate-400 hover:text-white hover:bg-[#222B3D] rounded-xl transition-colors cursor-pointer"
                           title="Edit"
-                        ><Edit2 className="w-4 h-4" /></button>
+                        >
+                          <Edit2 className="w-4 h-4" />
+                        </button>
                         {isOwner && (
                           <button
                             onClick={(e) => handleDelete(e, client.id)}
@@ -461,7 +613,7 @@ const Clients = () => {
                             title="Delete"
                           ><Trash2 className="w-4 h-4" /></button>
                         )}
-                        <ChevronRight className="w-4 h-4 text-slate-600 ml-2" />
+                        <ChevronRight className="w-4 h-4 text-slate-600 ml-1" />
                       </div>
                     </td>
                   </tr>
@@ -535,11 +687,10 @@ const Clients = () => {
                   </div>
                   <div className="space-y-1.5">
                     <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Date of Birth</label>
-                    <input
-                      type="date"
+                    <DateInput
                       value={clientFormData.birth_date}
-                      onChange={e => setClientFormData(p => ({ ...p, birth_date: e.target.value }))}
-                      className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white text-sm outline-none focus:border-[#CCFF00] transition-colors"
+                      onChange={(iso) => setClientFormData(p => ({ ...p, birth_date: iso }))}
+                      className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white text-sm outline-none focus:border-[#CCFF00] transition-colors font-mono"
                     />
                   </div>
                   <div className="space-y-1.5">
@@ -672,11 +823,10 @@ const Clients = () => {
 
                         <div className="space-y-1.5">
                           <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Start Date</label>
-                          <input
-                            type="date"
+                          <DateInput
                             value={subFormData.start_date}
-                            onChange={e => setSubFormData(p => ({ ...p, start_date: e.target.value }))}
-                            className="w-full px-4 py-2.5 bg-[#121721] border border-[#222B3D] rounded-xl text-white text-sm outline-none focus:border-[#8B5CF6] transition-colors"
+                            onChange={(iso) => setSubFormData(p => ({ ...p, start_date: iso }))}
+                            className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white text-sm outline-none focus:border-[#CCFF00] transition-colors font-mono"
                           />
                         </div>
 
@@ -695,7 +845,7 @@ const Clients = () => {
                       {endDatePreview && (
                         <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#CCFF00] bg-[#CCFF00]/10 border border-[#CCFF00]/20 px-3 py-2 rounded">
                           <Calendar className="w-4 h-4 flex-shrink-0" />
-                          Ends on: {endDatePreview}
+                          Ends on: {formatDateDDMMYYYY(endDatePreview)}
                         </div>
                       )}
                     </div>

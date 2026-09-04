@@ -2,6 +2,8 @@ import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { DollarSign, ArrowUpRight, ArrowDownRight, TrendingUp, Plus, Trash2, Calendar, Lock, X, PieChart, Award, Users, ShieldAlert, Printer } from 'lucide-react';
 import HistoricalArchive from '../components/HistoricalArchive';
+import { formatDateDDMMYYYY } from '../utils/dateFormat';
+import DateInput from '../components/DateInput';
 
 const Reports = () => {
   const { user } = useContext(AuthContext);
@@ -320,7 +322,7 @@ const Reports = () => {
               <tbody className="divide-y divide-slate-800">
                 {payments.map((p) => (
                   <tr key={p.id} className="hover:bg-[#121721]/20 transition-colors">
-                    <td className="px-6 py-4 text-slate-400 text-sm font-mono">{p.paid_at?.split(' ')[0] || '-'}</td>
+                    <td className="px-6 py-4 text-slate-400 text-sm font-mono">{formatDateDDMMYYYY(p.paid_at) || '-'}</td>
                     <td className="px-6 py-4 font-medium text-white">
                       {p.client_name || 'Client'} <span className="text-slate-500 text-xs font-mono">({p.client_code})</span>
                     </td>
@@ -371,7 +373,7 @@ const Reports = () => {
               <tbody className="divide-y divide-slate-800">
                 {expenses.map((e) => (
                   <tr key={e.id} className="hover:bg-[#121721]/20 transition-colors">
-                    <td className="px-6 py-4 text-slate-400 text-sm font-mono">{e.expense_date}</td>
+                    <td className="px-6 py-4 text-slate-400 text-sm font-mono">{formatDateDDMMYYYY(e.expense_date) || '—'}</td>
                     <td className="px-6 py-4 font-medium text-white">{e.title}</td>
                     <td className="px-6 py-4">
                       <span className="px-2.5 py-0.5 rounded-full text-xs font-medium bg-[#181E2A] text-slate-300">
@@ -399,8 +401,10 @@ const Reports = () => {
           </div>
         )}
       </div>
+        </>
+      )}
 
-      {/* Log Expense Modal */}
+      {/* Log Expense Modal — always available across all timeframe tabs */}
       {isExpenseModalOpen && (
         <div className="fixed inset-0 bg-[#0B0E14]/80 flex items-center justify-center p-4 z-[70]">
           <div className="bg-brand-surface border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
@@ -457,11 +461,10 @@ const Reports = () => {
 
               <div className="space-y-1">
                 <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Expense Date</label>
-                <input
-                  type="date"
+                <DateInput
                   value={expenseFormData.expense_date}
-                  onChange={(e) => setExpenseFormData(prev => ({ ...prev, expense_date: e.target.value }))}
-                  className="w-full px-4 py-2.5 bg-brand-panel border border-[#222B3D] rounded-xl text-white outline-none focus:border-brand-accent"
+                  onChange={(iso) => setExpenseFormData(prev => ({ ...prev, expense_date: iso }))}
+                  className="w-full px-4 py-2.5 bg-brand-panel border border-[#222B3D] rounded-xl text-white outline-none focus:border-brand-accent font-mono"
                 />
               </div>
 
@@ -493,8 +496,6 @@ const Reports = () => {
             </form>
           </div>
         </div>
-      )}
-      </>
       )}
     </div>
   );

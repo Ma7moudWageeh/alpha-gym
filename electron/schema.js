@@ -94,11 +94,31 @@ function initSchema() {
       created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS settings (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL DEFAULT ''
+    );
+
     CREATE INDEX IF NOT EXISTS idx_clients_phone ON clients(phone);
     CREATE INDEX IF NOT EXISTS idx_subscriptions_client ON subscriptions(client_id);
     CREATE INDEX IF NOT EXISTS idx_payments_client ON payments(client_id);
     CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(is_read, is_dismissed);
   `);
+
+  // Seed WhatsApp template keys with empty strings if not present
+  const waKeys = ['wa_template_birthday', 'wa_template_expiring', 'wa_template_expired', 'wa_template_welcome'];
+  const seedSetting = db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, '')`);
+  for (const key of waKeys) seedSetting.run(key);
+
+  // Clean up any legacy licensing/activation keys from settings table
+  try {
+    db.prepare(`
+      DELETE FROM settings 
+      WHERE key IN ('license_key', 'activation_status', 'machine_id', 'machine_guid', 'trial_expires_at', 'trial_start', 'is_activated', 'activation_date')
+    `).run();
+  } catch (e) {
+    // Table or keys might not exist
+  }
 
   try {
     db.prepare("ALTER TABLE packages ADD COLUMN description TEXT").run();

@@ -11,6 +11,7 @@ const Login = () => {
   const [formData, setFormData] = useState({ username: '', password: '' });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
   const [showReset, setShowReset] = useState(false);
   const [resetStep, setResetStep] = useState(1);
@@ -119,7 +120,18 @@ const Login = () => {
       <div className="w-full max-w-md bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl p-8 space-y-6">
         {/* Logo & Title */}
         <div className="text-center">
-          <img src={logo} alt="Alpha Gym Logo" className="w-20 h-20 mx-auto mb-4 object-contain" />
+          {!imageError ? (
+            <img
+              src={logo}
+              alt="Alpha Gym Logo"
+              onError={() => setImageError(true)}
+              className="w-20 h-20 mx-auto mb-4 object-contain"
+            />
+          ) : (
+            <div className="w-20 h-20 mx-auto mb-4 rounded-2xl bg-[#CCFF00]/10 border border-[#CCFF00]/30 flex items-center justify-center font-black text-2xl text-[#CCFF00]">
+              AG
+            </div>
+          )}
           <h1 className="text-2xl font-black font-display text-white uppercase tracking-wider">Alpha Gym</h1>
           <p className="text-slate-400 mt-1 text-xs font-bold uppercase tracking-widest">Management System</p>
         </div>

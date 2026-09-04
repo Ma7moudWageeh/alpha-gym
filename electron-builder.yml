@@ -11,6 +11,8 @@ files:
   - "electron/**/*"
   - "dist/**/*"
   - "!dist/installers/**"
+  - "build/**/*"
+  - "public/**/*"
   - "bill/**/*"
   - "package.json"
 
@@ -24,13 +26,16 @@ win:
     - target: nsis
       arch:
         - x64
-  icon: src/assets/icon.ico
+  icon: "build/icon.ico"
 
 # NSIS installer configuration (Windows)
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
   differentialPackage: true
+  installerIcon: "build/icon.ico"
+  uninstallerIcon: "build/icon.ico"
+  installerHeaderIcon: "build/icon.ico"
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Alpha Gym

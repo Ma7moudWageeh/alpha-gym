@@ -13,12 +13,24 @@ const navItems = [
 
 const Sidebar = () => {
   const { user } = useContext(AuthContext);
+  const [imageError, setImageError] = React.useState(false);
 
   return (
     <aside className="fixed left-0 top-0 h-full w-64 bg-[#0B0E14] border-r border-[#222B3D] flex flex-col z-20">
       {/* Brand Header */}
       <div className="h-16 flex items-center px-6 border-b border-[#222B3D]">
-        <img src={logo} alt="Alpha Gym" className="w-8 h-8 mr-3 object-contain" />
+        {!imageError ? (
+          <img
+            src={logo}
+            alt="Alpha Gym"
+            onError={() => setImageError(true)}
+            className="w-8 h-8 mr-3 object-contain"
+          />
+        ) : (
+          <div className="w-8 h-8 mr-3 rounded-lg bg-[#CCFF00]/10 border border-[#CCFF00]/30 flex items-center justify-center font-black text-xs text-[#CCFF00]">
+            AG
+          </div>
+        )}
         <span className="text-white font-black font-display text-lg tracking-wider uppercase">Alpha Gym</span>
       </div>
 

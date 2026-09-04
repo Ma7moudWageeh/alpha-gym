@@ -1,5 +1,6 @@
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, nativeImage } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 
 autoUpdater.autoDownload = false;
@@ -17,6 +18,29 @@ if (process.env.NODE_ENV === 'development' || process.env.TEST_UPDATE === 'true'
 // In dev, ELECTRON_START_URL is set by our `dev` npm script via wait-on.
 const isDev = !app.isPackaged;
 
+function resolveAppIcon() {
+  const possiblePaths = [
+    path.join(__dirname, '../build/icon.ico'),
+    path.join(__dirname, '../public/icon.ico'),
+    path.join(process.resourcesPath || '', 'icon.ico'),
+    path.join(process.resourcesPath || '', 'build/icon.ico'),
+    path.join(__dirname, '../src/assets/icon.ico'),
+    path.join(__dirname, '../build/icon.png'),
+    path.join(__dirname, '../public/icon.png'),
+    path.join(__dirname, '../src/assets/logo.png'),
+  ];
+
+  for (const iconPath of possiblePaths) {
+    if (fs.existsSync(iconPath)) {
+      const img = nativeImage.createFromPath(iconPath);
+      if (!img.isEmpty()) {
+        return img;
+      }
+    }
+  }
+  return undefined;
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -24,7 +48,7 @@ function createWindow() {
     minWidth: 1024,
     minHeight: 700,
     title: 'Alpha Gym - Management System',
-    icon: path.join(__dirname, '../src/assets/logo.png'),
+    icon: resolveAppIcon(),
     backgroundColor: '#0F172A',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

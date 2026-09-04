@@ -42,6 +42,7 @@ const OwnerRoute = ({ children }) => {
 
 const AppEntry = () => {
   const [checking, setChecking] = useState(true);
+  const [imageError, setImageError] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -65,7 +66,18 @@ const AppEntry = () => {
   if (checking) {
     return (
       <div className="min-h-screen bg-[#0B0E14] flex flex-col items-center justify-center">
-        <img src={logo} alt="Loading" className="w-24 h-24 mb-4 animate-pulse" />
+        {!imageError ? (
+          <img
+            src={logo}
+            alt="Loading"
+            onError={() => setImageError(true)}
+            className="w-24 h-24 mb-4 animate-pulse object-contain"
+          />
+        ) : (
+          <div className="w-24 h-24 mb-4 rounded-2xl bg-[#CCFF00]/10 border border-[#CCFF00]/30 flex items-center justify-center font-black text-3xl text-[#CCFF00] animate-pulse">
+            AG
+          </div>
+        )}
         <p className="text-slate-400">Initializing Alpha Gym...</p>
       </div>
     );

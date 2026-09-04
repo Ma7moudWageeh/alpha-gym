@@ -16,6 +16,7 @@ const SetupWizard = () => {
   });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
   const handleChange = (e) => {
     setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
@@ -74,7 +75,18 @@ const SetupWizard = () => {
     <div className="min-h-screen bg-[#0B0E14] flex items-center justify-center p-4">
       <div className="max-w-md w-full bg-[#121721] rounded shadow-xl border border-[#222B3D] p-8 space-y-6">
         <div className="text-center">
-          <img src={logo} alt="Alpha Gym Logo" className="w-24 h-24 mx-auto mb-4 object-contain" />
+          {!imageError ? (
+            <img
+              src={logo}
+              alt="Alpha Gym Logo"
+              onError={() => setImageError(true)}
+              className="w-24 h-24 mx-auto mb-4 object-contain"
+            />
+          ) : (
+            <div className="w-24 h-24 mx-auto mb-4 rounded-2xl bg-[#CCFF00]/10 border border-[#CCFF00]/30 flex items-center justify-center font-black text-2xl text-[#CCFF00]">
+              AG
+            </div>
+          )}
           <h1 className="text-3xl font-black font-display uppercase tracking-wider text-white tracking-tight">System Setup</h1>
           <p className="text-slate-400 mt-2">Create the master owner account</p>
         </div>

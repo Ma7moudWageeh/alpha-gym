@@ -220,9 +220,12 @@ const Dashboard = () => {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div id="alerts-widget" className="lg:col-span-2 card overflow-hidden flex flex-col">
           <div className="border-b border-[#222B3D] bg-[#121721] px-6 py-4 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-amber-400 font-bold tracking-wide text-sm">
-              <Clock className="w-4 h-4 text-amber-400" />
-              <span>EXPIRING SOON ({validExpiringClients.length})</span>
+            <div className="flex items-center gap-2 text-orange-500 font-bold tracking-wide text-sm">
+              <Clock className="w-4 h-4 text-orange-500" />
+              <span>EXPIRING SOON</span>
+              <span className="text-xs px-2 py-0.5 rounded-full font-bold bg-orange-500/10 text-orange-500 border border-orange-500/20">
+                {validExpiringClients.length}
+              </span>
             </div>
           </div>
 
@@ -253,7 +256,7 @@ const Dashboard = () => {
                         </td>
                         <td className="px-5 py-4 text-slate-300 font-medium">{sub.package_title}</td>
                         <td className="px-5 py-4">
-                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/10 text-amber-400 border border-amber-500/30 shadow-[0_0_8px_rgba(245,158,11,0.15)]">
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-orange-500/10 text-orange-500 border border-orange-500/30 shadow-[0_0_8px_rgba(249,115,22,0.2)]">
                             {timeLeftLabel(daysLeft)}
                           </span>
                         </td>

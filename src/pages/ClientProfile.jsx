@@ -673,9 +673,9 @@ const ClientProfile = () => {
               ? <StatusBadge status={profileStatus} />
               : <StatusBadge status={null} />}
             {isBirthdayToday(client.date_of_birth) && (
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-400/10 border border-amber-400/30 rounded-full animate-pulse">
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow-400/10 border border-yellow-400/30 rounded-full animate-pulse">
                 <span className="text-base leading-none">🎉</span>
-                <span className="text-[10px] font-bold uppercase tracking-widest text-amber-400">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-yellow-400">
                   Celebrating Birthday Today
                 </span>
               </div>

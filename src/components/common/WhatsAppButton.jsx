@@ -15,11 +15,11 @@ const ICON_SIZE = { sm: "w-3.5 h-3.5", md: "w-4 h-4" };
 const PAD       = { sm: "p-1",         md: "p-1.5"    };
 
 const CONTEXT_STYLES = {
-  WELCOME:          "text-white bg-white/10 border border-white/40 shadow-[0_0_12px_rgba(255,255,255,0.45)] hover:bg-white/20",
-  BIRTHDAY:         "text-yellow-400 bg-yellow-500/10 border border-yellow-400/40 shadow-[0_0_10px_rgba(250,204,21,0.25)] hover:bg-yellow-500/20",
-  EXPIRING:         "text-amber-400 bg-amber-500/10 border border-amber-500/30 shadow-[0_0_8px_rgba(245,158,11,0.2)] hover:bg-amber-500/20",
-  EXPIRED:          "text-rose-400 bg-rose-500/10 border border-rose-500/30 shadow-[0_0_8px_rgba(244,63,94,0.2)] hover:bg-rose-500/20",
-  DEFAULT:          "text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20",
+  WELCOME:          "text-white bg-white/10 border border-white/30 shadow-[0_0_12px_rgba(255,255,255,0.4)] hover:border-white hover:bg-white/20",
+  BIRTHDAY:         "text-yellow-400 bg-yellow-400/10 border border-yellow-400/30 shadow-[0_0_12px_rgba(250,204,21,0.35)] hover:border-yellow-400 hover:bg-yellow-400/20",
+  EXPIRING:         "text-orange-500 bg-orange-500/10 border border-orange-500/30 shadow-[0_0_12px_rgba(249,115,22,0.35)] hover:border-orange-500 hover:bg-orange-500/20",
+  EXPIRED:          "text-rose-500 bg-rose-500/10 border border-rose-500/30 shadow-[0_0_12px_rgba(244,63,94,0.35)] hover:border-rose-500 hover:bg-rose-500/20",
+  DEFAULT:          "text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 shadow-[0_0_10px_rgba(16,185,129,0.2)] hover:border-emerald-500 hover:bg-emerald-500/20",
   DEFAULT_DISABLED: "text-slate-600 border border-slate-700 opacity-40 cursor-not-allowed",
 };
 

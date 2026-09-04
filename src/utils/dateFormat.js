@@ -148,7 +148,7 @@ export function getAvatarGlowClass(client) {
 
   // 3. Expiring Soon (1 Day Remaining)
   if (daysLeft === 1) {
-    return "ring-2 ring-amber-400 shadow-[0_0_12px_rgba(245,158,11,0.35)] border-transparent";
+    return "ring-2 ring-orange-500 shadow-[0_0_14px_rgba(249,115,22,0.4)] border-transparent";
   }
 
   // 4. New Client (Only eligible if NOT expired/overdue)

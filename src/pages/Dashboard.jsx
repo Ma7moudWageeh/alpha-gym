@@ -208,7 +208,7 @@ const Dashboard = () => {
 
       <div className={`grid grid-cols-1 md:grid-cols-2 ${isOwner ? 'lg:grid-cols-3' : 'lg:grid-cols-2'} gap-6`}>
         <div
-          onClick={() => navigate('/clients?status=active')}
+          onClick={() => navigate('/clients', { state: { initialTab: 'ACTIVE' } })}
           className="card p-6 bg-[#121721] border-t-4 border-[#CCFF00] flex items-center justify-between cursor-pointer hover:border-[#CCFF00] hover:scale-[1.01] transition-all shadow-sm"
         >
           <div>
@@ -222,7 +222,7 @@ const Dashboard = () => {
         </div>
 
         <div
-          onClick={() => navigate('/clients?status=frozen')}
+          onClick={() => navigate('/clients', { state: { initialTab: 'FROZEN' } })}
           className="card p-6 bg-[#121721] border-t-4 border-[#06B6D4] flex items-center justify-between cursor-pointer hover:border-[#06B6D4] hover:scale-[1.01] transition-all shadow-sm"
         >
           <div>

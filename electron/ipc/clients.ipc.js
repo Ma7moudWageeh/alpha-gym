@@ -154,10 +154,18 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
   db.syncAllSubscriptionStatuses(db);
   try {
     let query = `
-      SELECT c.*, s.end_date as subscription_end 
+      SELECT 
+        c.*,
+        s.id AS current_subscription_id,
+        s.end_date AS subscription_end,
+        s.status AS subscription_status,
+        s.is_frozen AS subscription_is_frozen
       FROM clients c 
       LEFT JOIN subscriptions s ON s.id = (
-        SELECT id FROM subscriptions WHERE client_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
+        SELECT id FROM subscriptions 
+        WHERE client_id = c.id 
+        ORDER BY created_at DESC, id DESC 
+        LIMIT 1
       )
       WHERE 1=1
     `;
@@ -174,6 +182,20 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
 
     const enriched = clients.map((c) => {
       const statusInfo = computeClientStatus(c.id);
+      const isFrozen = Boolean(
+        statusInfo.sub_status === 'frozen' ||
+        statusInfo.computed_status === 'FROZEN' ||
+        String(c.status || '').toLowerCase() === 'frozen' ||
+        String(c.subscription_status || '').toLowerCase() === 'frozen' ||
+        c.is_frozen === 1 ||
+        c.is_frozen === true ||
+        c.subscription_is_frozen === 1 ||
+        c.subscription_is_frozen === true
+      );
+
+      const effectiveSubStatus = isFrozen ? 'frozen' : (statusInfo.sub_status || c.status);
+      const effectiveComputedStatus = isFrozen ? 'FROZEN' : statusInfo.computed_status;
+
       const photoUrl = photoToDataUrl(c.profile_photo);
       const createdAt = c.registered_at || c.created_at || null;
       return {
@@ -181,12 +203,16 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
         remaining_debt: Number(c.remaining_debt || 0),
         created_at: createdAt,
         registered_at: createdAt,
-        sub_status: statusInfo.sub_status,
-        computed_status: statusInfo.computed_status,
+        status: effectiveSubStatus,
+        is_frozen: isFrozen ? 1 : 0,
+        subscription_status: c.subscription_status || effectiveSubStatus,
+        subscription_is_frozen: isFrozen ? 1 : 0,
+        sub_status: effectiveSubStatus,
+        computed_status: effectiveComputedStatus,
         latest_end_date: statusInfo.latest_end_date,
         end_date: statusInfo.latest_end_date || c.subscription_end,
-        days_left: statusInfo.days_left,
-        days_since_expiry: statusInfo.days_since_expiry,
+        days_left: isFrozen ? null : statusInfo.days_left,
+        days_since_expiry: isFrozen ? null : statusInfo.days_since_expiry,
         freeze_reason: statusInfo.freeze_reason,
         profile_photo_url: photoUrl,
         photoUrl,
@@ -220,7 +246,7 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
         active: activeCount,
         frozen: frozenCount,
         expired: expiredCount,
-      },
+      }
     };
   } catch (err) {
     return { error: err.message };
@@ -230,16 +256,26 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
 ipcMain.handle('clients:getStats', async () => {
   db.syncAllSubscriptionStatuses(db);
   try {
-    const clients = db.prepare('SELECT id FROM clients').all();
+    const clients = db.prepare('SELECT id, status, is_frozen FROM clients').all();
     let active = 0;
     let frozen = 0;
     let expired = 0;
 
     for (const c of clients) {
       const statusInfo = computeClientStatus(c.id);
-      if (statusInfo.computed_status === 'ACTIVE') active++;
-      else if (statusInfo.computed_status === 'FROZEN') frozen++;
-      else if (statusInfo.computed_status === 'EXPIRED') expired++;
+      const isFrozen = Boolean(
+        statusInfo.sub_status === 'frozen' ||
+        statusInfo.computed_status === 'FROZEN' ||
+        String(c.status || '').toLowerCase() === 'frozen' ||
+        c.is_frozen === 1
+      );
+      if (isFrozen) {
+        frozen++;
+      } else if (statusInfo.computed_status === 'ACTIVE') {
+        active++;
+      } else if (statusInfo.computed_status === 'EXPIRED') {
+        expired++;
+      }
     }
 
     return {
@@ -288,6 +324,22 @@ ipcMain.handle('clients:getById', async (event, { id }) => {
       WHERE s.client_id = ? AND s.status = 'frozen'
       ORDER BY s.id DESC LIMIT 1
     `).get(id);
+
+    const isFrozen = Boolean(
+      statusInfo.sub_status === 'frozen' ||
+      statusInfo.computed_status === 'FROZEN' ||
+      String(client.status || '').toLowerCase() === 'frozen' ||
+      client.is_frozen === 1 ||
+      (activeSubscription && activeSubscription.status === 'frozen')
+    );
+
+    client.is_frozen = isFrozen ? 1 : 0;
+    if (isFrozen) {
+      client.status = 'frozen';
+      client.sub_status = 'frozen';
+      client.client_status = 'frozen';
+      client.computed_status = 'FROZEN';
+    }
 
     if (!activeSubscription) {
       activeSubscription = db.prepare(`

@@ -1,5 +1,35 @@
 export const CHANGELOG_DATA = [
   {
+    version: "1.0.11",
+    releaseDate: "September 2026",
+    title: "Frozen Memberships Sync & Dashboard Alignment",
+    categories: [
+      {
+        name: "Membership Synchronization",
+        items: [
+          "Dual-table atomic synchronization between subscriptions and clients on freeze and unfreeze.",
+          "Perfect count alignment between Dashboard and Clients roster for Active and Frozen members.",
+          "Client roster query enriched with real-time subscription status and frozen flags."
+        ]
+      },
+      {
+        name: "UI & Visual Identity",
+        items: [
+          "Ice-blue visual theme for frozen members: ❄️ FROZEN animated badge and cyan avatar glow.",
+          "Electric cyan UNFREEZE MEMBERSHIP action button in member profile.",
+          "Updated Frozen KPI card on Clients screen with clean cyan accents."
+        ]
+      },
+      {
+        name: "Navigation & Workflow",
+        items: [
+          "Dashboard KPI cards deep-linking: clicking Active or Frozen immediately filters the Clients roster.",
+          "Automatic real-time roster refresh upon freezing or unfreezing subscriptions."
+        ]
+      }
+    ]
+  },
+  {
     version: "1.0.10",
     releaseDate: "September 2026",
     title: "Financial Dues & Member Management Update",

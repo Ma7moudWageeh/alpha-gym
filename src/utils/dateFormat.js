@@ -181,10 +181,24 @@ export function calculateDaysRemaining(endDateInput) {
 export function getClientEffectiveStatus(client) {
   if (!client) return 'INACTIVE';
 
-  const rawStatus = String(client.status || '').toLowerCase();
-  if (rawStatus === 'frozen' || client.is_frozen) return 'FROZEN';
+  const rawClientStatus = String(client.status || '').toLowerCase();
+  const rawSubStatus = String(client.subscription_status || client.sub_status || client.activeSubscription?.status || '').toLowerCase();
 
-  const endDate = client.end_date || client.subscription_end || client.latest_end_date;
+  // Frozen takes precedence over date calculations
+  if (
+    rawClientStatus === 'frozen' ||
+    rawSubStatus === 'frozen' ||
+    client.is_frozen === 1 ||
+    client.is_frozen === true ||
+    client.subscription_is_frozen === 1 ||
+    client.subscription_is_frozen === true ||
+    client.activeSubscription?.is_frozen === 1 ||
+    client.activeSubscription?.status === 'frozen'
+  ) {
+    return 'FROZEN';
+  }
+
+  const endDate = client.end_date || client.subscription_end || client.latest_end_date || client.activeSubscription?.end_date;
   if (!endDate) return 'NO PLAN';
 
   const daysRemaining = calculateDaysRemaining(endDate);
@@ -209,14 +223,14 @@ export function isNewClientToday(client) {
   if (createdStr !== todayStr) return false;
 
   const status = getClientEffectiveStatus(client);
-  return status !== 'EXPIRED' && status !== 'INACTIVE';
+  return status !== 'EXPIRED' && status !== 'INACTIVE' && status !== 'FROZEN';
 }
 
 /**
  * Resolves the dynamic glow ring and border for client avatars
  * based on the strict lifecycle hierarchy:
  * 1. Birthday Today (Gold / 1 Day Only)
- * 2. Pending Activation (Subtle Purple/Indigo without glow)
+ * 2. Frozen Subscription (Ice-Cyan / Cyan Glow)
  * 3. Expired Subscription within 30 days (Rose Red)
  * 4. Expiring Soon - Exactly 1 day remaining (Deep Orange)
  * 5. New Client Registered Today (Pure White)
@@ -231,19 +245,24 @@ export function getAvatarGlowClass(client) {
 
   const status = getClientEffectiveStatus(client);
 
-  // Priority 2: Expired Subscription within 30 days (Rose Red)
+  // Priority 2: Frozen Subscription (Ice-Blue / Cyan Glow)
+  if (status === 'FROZEN') {
+    return 'ring-2 ring-cyan-400/80 shadow-[0_0_12px_rgba(6,182,212,0.4)] border-cyan-400 text-cyan-300';
+  }
+
+  // Priority 3: Expired Subscription within 30 days (Rose Red)
   if (status === 'EXPIRED') {
     return "ring-2 ring-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.35)] border-transparent";
   }
 
-  // Priority 3: Expiring Soon - Exactly 1 day remaining (Deep Orange)
+  // Priority 4: Expiring Soon - Exactly 1 day remaining (Deep Orange)
   const endDate = client.end_date || client.subscription_end || client.latest_end_date || client.activeSubscription?.end_date;
   const daysRemaining = calculateDaysRemaining(endDate);
   if (status === 'ACTIVE' && daysRemaining === 1) {
     return "ring-2 ring-orange-500 shadow-[0_0_14px_rgba(249,115,22,0.4)] border-transparent";
   }
 
-  // Priority 4: New Client Registered Today (Pure White)
+  // Priority 5: New Client Registered Today (Pure White)
   if (isNewClientToday(client)) {
     return "ring-2 ring-white shadow-[0_0_14px_rgba(255,255,255,0.45)] border-transparent";
   }

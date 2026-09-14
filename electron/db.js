@@ -157,14 +157,26 @@ function unfreezeSubscriptionRecord(target, sub, today) {
   target.prepare(`
     UPDATE subscriptions
     SET status = 'active',
+        is_frozen = 0,
         end_date = ?,
         frozen_days = ?,
+        freeze_date = NULL,
         frozen_on = NULL,
         freeze_end_date = NULL,
         freeze_mode = NULL,
         freeze_reason = NULL
     WHERE id = ?
   `).run(newEndDate, totalFrozenDays, sub.id);
+
+  if (sub.client_id) {
+    target.prepare(`
+      UPDATE clients
+      SET status = 'active',
+          is_frozen = 0,
+          end_date = ?
+      WHERE id = ?
+    `).run(newEndDate, sub.client_id);
+  }
 
   return { end_date: newEndDate, added_days: daysElapsed };
 }

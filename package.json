@@ -1,6 +1,6 @@
 {
   "name": "alpha-gym",
-  "version": "1.0.10",
+  "version": "1.0.11",
   "description": "Alpha Gym - Management System",
   "main": "electron/main.js",
   "type": "module",

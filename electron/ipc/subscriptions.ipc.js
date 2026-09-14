@@ -208,60 +208,83 @@ ipcMain.handle('subscriptions:renew', async (event, { client_id, package_id, sta
   }
 });
 
-ipcMain.handle('subscriptions:freeze', async (event, { subscription_id, reason, mode = 'indefinite', freeze_days }) => {
+ipcMain.handle('subscriptions:freeze', async (event, { subscription_id, subscriptionId, clientId, reason, mode = 'indefinite', freeze_days }) => {
   try {
-    const sub = db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subscription_id);
+    const subId = subscription_id || subscriptionId;
+    const sub = db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subId);
     if (!sub) return { error: 'Subscription not found' };
     if (sub.status !== 'active') return { error: `Cannot freeze subscription with status '${sub.status}'` };
 
+    const targetClientId = clientId || sub.client_id;
     const today = new Date().toISOString().split('T')[0];
     const freezeMode = mode === 'timed' ? 'timed' : 'indefinite';
     const freezeReason = reason || null;
 
-    if (freezeMode === 'timed') {
-      const days = parseInt(freeze_days, 10);
-      if (!days || days < 1) {
-        return { error: 'Freeze days must be a positive number for timed freeze.' };
+    const runFreeze = db.transaction(() => {
+      if (freezeMode === 'timed') {
+        const days = parseInt(freeze_days, 10);
+        if (!days || days < 1) {
+          throw new Error('Freeze days must be a positive number for timed freeze.');
+        }
+
+        const freezeEndDate = addDays(today, days);
+
+        db.prepare(`
+          UPDATE subscriptions
+          SET status = 'frozen',
+              is_frozen = 1,
+              freeze_date = ?,
+              frozen_on = ?,
+              freeze_reason = ?,
+              freeze_mode = 'timed',
+              freeze_end_date = ?
+          WHERE id = ?
+        `).run(today, today, freezeReason, freezeEndDate, subId);
+
+        db.prepare(`
+          UPDATE clients
+          SET status = 'frozen',
+              is_frozen = 1
+          WHERE id = ?
+        `).run(targetClientId);
+
+        return {
+          frozen_on: today,
+          freeze_mode: 'timed',
+          freeze_end_date: freezeEndDate,
+          end_date: sub.end_date,
+        };
+      } else {
+        db.prepare(`
+          UPDATE subscriptions
+          SET status = 'frozen',
+              is_frozen = 1,
+              freeze_date = ?,
+              frozen_on = ?,
+              freeze_reason = ?,
+              freeze_mode = 'indefinite',
+              freeze_end_date = NULL
+          WHERE id = ?
+        `).run(today, today, freezeReason, subId);
+
+        db.prepare(`
+          UPDATE clients
+          SET status = 'frozen',
+              is_frozen = 1
+          WHERE id = ?
+        `).run(targetClientId);
+
+        return {
+          frozen_on: today,
+          freeze_mode: 'indefinite',
+          end_date: sub.end_date,
+        };
       }
+    });
 
-      const freezeEndDate = addDays(today, days);
-
-      // Do NOT shift end_date on freeze — only store freeze metadata
-      db.prepare(`
-        UPDATE subscriptions
-        SET status = 'frozen',
-            frozen_on = ?,
-            freeze_reason = ?,
-            freeze_mode = 'timed',
-            freeze_end_date = ?
-        WHERE id = ?
-      `).run(today, freezeReason, freezeEndDate, subscription_id);
-
-      return {
-        success: true,
-        frozen_on: today,
-        freeze_mode: 'timed',
-        freeze_end_date: freezeEndDate,
-        end_date: sub.end_date,
-      };
-    }
-
-    db.prepare(`
-      UPDATE subscriptions
-      SET status = 'frozen',
-          frozen_on = ?,
-          freeze_reason = ?,
-          freeze_mode = 'indefinite',
-          freeze_end_date = NULL
-      WHERE id = ?
-    `).run(today, freezeReason, subscription_id);
-
-    return {
-      success: true,
-      frozen_on: today,
-      freeze_mode: 'indefinite',
-      end_date: sub.end_date,
-    };
+    const result = runFreeze();
+    db.syncAllSubscriptionStatuses(db);
+    return { success: true, ...result };
   } catch (err) {
     return { error: err.message };
   }
@@ -278,13 +301,30 @@ function applyUnfreeze(sub) {
   return db.unfreezeSubscriptionRecord(db, sub, new Date().toISOString().split('T')[0]);
 }
 
-ipcMain.handle('subscriptions:unfreeze', async (event, { subscription_id }) => {
+ipcMain.handle('subscriptions:unfreeze', async (event, { subscription_id, subscriptionId, clientId }) => {
   try {
-    const sub = db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subscription_id);
+    const subId = subscription_id || subscriptionId;
+    const sub = db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subId);
     if (!sub) return { error: 'Subscription not found' };
     if (sub.status !== 'frozen') return { error: 'Subscription is not frozen' };
 
-    const result = applyUnfreeze(sub);
+    const targetClientId = clientId || sub.client_id;
+    const runUnfreeze = db.transaction(() => {
+      const result = applyUnfreeze(sub);
+
+      db.prepare(`
+        UPDATE clients
+        SET status = 'active',
+            is_frozen = 0,
+            end_date = ?
+        WHERE id = ?
+      `).run(result.end_date, targetClientId);
+
+      return result;
+    });
+
+    const result = runUnfreeze();
+    db.syncAllSubscriptionStatuses(db);
     return { success: true, ...result };
   } catch (err) {
     return { error: err.message };

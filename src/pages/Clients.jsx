@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useMemo } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import {
   Search, Plus, Edit2, Trash2, User, X, Printer,
@@ -72,33 +72,38 @@ const getStatusBadge = (status) => {
   switch (norm) {
     case 'ACTIVE':
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-lime-400/10 text-lime-400 border border-lime-400/30">
-          <span className="w-1.5 h-1.5 rounded-full bg-lime-400 mr-1.5"></span> ACTIVE
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+          ACTIVE
         </span>
       );
     case 'EXPIRED':
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-rose-500/10 text-rose-500 border border-rose-500/30">
-          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mr-1.5"></span> EXPIRED
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-rose-500/15 text-rose-400 border border-rose-500/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+          EXPIRED
         </span>
       );
     case 'FROZEN':
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-cyan-400/10 text-cyan-400 border border-cyan-400/30">
-          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 mr-1.5"></span> FROZEN
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-cyan-500/15 text-cyan-400 border border-cyan-500/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+          ❄️ FROZEN
         </span>
       );
     case 'INACTIVE':
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-slate-500/10 text-slate-400 border border-slate-500/30">
-          <span className="w-1.5 h-1.5 rounded-full bg-slate-500 mr-1.5"></span> INACTIVE
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-500/15 text-slate-400 border border-slate-500/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+          INACTIVE
         </span>
       );
     case 'NO PLAN':
     default:
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-slate-500/10 text-slate-400 border border-slate-500/30">
-          <span className="w-1.5 h-1.5 rounded-full bg-slate-500 mr-1.5"></span> NO PLAN
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-slate-500/15 text-slate-400 border border-slate-500/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+          NO PLAN
         </span>
       );
   }
@@ -109,6 +114,7 @@ const Clients = () => {
   const { user } = useContext(AuthContext);
   const isOwner = user?.role === 'owner';
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
 
   const [clients, setClients] = useState([]);
@@ -117,14 +123,17 @@ const Clients = () => {
   const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || 'all');
+
+  const initialFilter = (location.state?.initialTab || searchParams.get('status') || 'all').toLowerCase();
+  const [statusFilter, setStatusFilter] = useState(initialFilter);
 
   useEffect(() => {
-    const statusFromUrl = searchParams.get('status');
-    if (statusFromUrl) {
-      setStatusFilter(statusFromUrl);
+    if (location.state?.initialTab) {
+      setStatusFilter(location.state.initialTab.toLowerCase());
+    } else if (searchParams.get('status')) {
+      setStatusFilter(searchParams.get('status').toLowerCase());
     }
-  }, [searchParams]);
+  }, [location.state, searchParams]);
 
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
@@ -564,13 +573,13 @@ const Clients = () => {
 
         <div 
           onClick={() => setActiveTab('FROZEN')}
-          className={`card p-5 bg-[#121721] border ${activeTab === 'FROZEN' ? 'border-sky-500 bg-sky-500/10' : 'border-[#222B3D] hover:border-sky-500/50'} cursor-pointer transition-colors`}
+          className={`card p-5 bg-[#121721] border ${activeTab === 'FROZEN' ? 'border-cyan-500 bg-cyan-500/10' : 'border-[#222B3D] hover:border-cyan-500/50'} cursor-pointer transition-colors`}
         >
           <div className="flex justify-between items-start">
-            <p className={`text-xs font-bold uppercase tracking-widest ${activeTab === 'FROZEN' ? 'text-sky-400' : 'text-slate-400'}`}>Frozen</p>
-            <Snowflake className={`w-4 h-4 ${activeTab === 'FROZEN' ? 'text-sky-400' : 'text-slate-500'}`} />
+            <p className={`text-xs font-bold uppercase tracking-widest ${activeTab === 'FROZEN' ? 'text-cyan-400' : 'text-slate-400'}`}>Frozen</p>
+            <Snowflake className={`w-4 h-4 ${activeTab === 'FROZEN' ? 'text-cyan-400' : 'text-slate-500'}`} />
           </div>
-          <h3 className="text-3xl font-black font-display mt-2 text-sky-400">
+          <h3 className="text-3xl font-black font-display mt-2 text-cyan-400">
             {frozenCount}
           </h3>
         </div>

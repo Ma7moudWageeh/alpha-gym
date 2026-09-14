@@ -50,6 +50,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getTodayBirthdays: () => ipcRenderer.invoke('clients:getTodayBirthdays'),
     settleDebt: (payload) => ipcRenderer.invoke('clients:settleDebt', payload),
   },
+  getAllClients: (args) => ipcRenderer.invoke('clients:getAll', args),
   createClient: (args) => ipcRenderer.invoke('clients:create', args),
   plans: {
     getAll: (args) => ipcRenderer.invoke('packages:getAll', args),

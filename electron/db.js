@@ -23,30 +23,45 @@ try {
     db.prepare("UPDATE clients SET status = 'expired' WHERE UPPER(status) = 'OVERDUE'").run();
   } catch (e) {}
 
-  // Migration: Debt tracking & settlement
-  const addColumnIfNotExists = (table, columnDef) => {
-    try {
-      db.prepare(`ALTER TABLE ${table} ADD COLUMN ${columnDef}`).run();
-    } catch (error) {
-      if (!error.message.includes("duplicate column name")) {
-        console.error(`Migration error on ${table}:`, error.message);
+  // Auto-migration: ensure schema integrity on startup
+  function ensureSchemaIntegrity(dbInstance) {
+    const safeAddColumn = (table, columnDef) => {
+      try {
+        dbInstance.prepare(`ALTER TABLE ${table} ADD COLUMN ${columnDef}`).run();
+      } catch (e) {
+        // Column already exists or safely ignore
       }
-    }
-  };
+    };
 
-  addColumnIfNotExists("clients", "remaining_debt REAL DEFAULT 0");
-  addColumnIfNotExists("clients", "birth_date TEXT");
-  addColumnIfNotExists("clients", "created_at DATETIME");
-  addColumnIfNotExists("subscriptions", "plan_id INTEGER");
-  addColumnIfNotExists("subscriptions", "price REAL DEFAULT 0");
-  addColumnIfNotExists("subscriptions", "paid_amount REAL DEFAULT 0");
-  addColumnIfNotExists("subscriptions", "remaining_amount REAL DEFAULT 0");
-  addColumnIfNotExists("subscriptions", "duration_days INTEGER DEFAULT 30");
-  addColumnIfNotExists("subscriptions", "is_deferred INTEGER DEFAULT 0");
-  addColumnIfNotExists("clients", "is_pending_activation INTEGER DEFAULT 0");
-  addColumnIfNotExists("clients", "start_date TEXT");
-  addColumnIfNotExists("clients", "end_date TEXT");
-  addColumnIfNotExists("clients", "status TEXT DEFAULT 'active'");
+    // Subscriptions Table Migrations
+    safeAddColumn('subscriptions', 'is_frozen INTEGER DEFAULT 0');
+    safeAddColumn('subscriptions', 'freeze_date TEXT DEFAULT NULL');
+    safeAddColumn('subscriptions', 'status TEXT DEFAULT "active"');
+    safeAddColumn('subscriptions', 'price REAL DEFAULT 0');
+    safeAddColumn('subscriptions', 'paid_amount REAL DEFAULT 0');
+    safeAddColumn('subscriptions', 'remaining_amount REAL DEFAULT 0');
+    safeAddColumn('subscriptions', 'plan_id INTEGER');
+    safeAddColumn('subscriptions', 'duration_days INTEGER DEFAULT 30');
+    safeAddColumn('subscriptions', 'is_deferred INTEGER DEFAULT 0');
+    safeAddColumn('subscriptions', 'frozen_on TEXT DEFAULT NULL');
+    safeAddColumn('subscriptions', 'frozen_days INTEGER DEFAULT 0');
+    safeAddColumn('subscriptions', 'freeze_reason TEXT DEFAULT NULL');
+    safeAddColumn('subscriptions', 'freeze_mode TEXT DEFAULT NULL');
+    safeAddColumn('subscriptions', 'freeze_end_date TEXT DEFAULT NULL');
+
+    // Clients Table Migrations
+    safeAddColumn('clients', 'remaining_debt REAL DEFAULT 0');
+    safeAddColumn('clients', 'status TEXT DEFAULT "active"');
+    safeAddColumn('clients', 'is_frozen INTEGER DEFAULT 0');
+    safeAddColumn('clients', 'birth_date TEXT');
+    safeAddColumn('clients', 'created_at DATETIME');
+    safeAddColumn('clients', 'is_pending_activation INTEGER DEFAULT 0');
+    safeAddColumn('clients', 'start_date TEXT');
+    safeAddColumn('clients', 'end_date TEXT');
+    safeAddColumn('clients', 'freeze_reason TEXT DEFAULT NULL');
+  }
+
+  ensureSchemaIntegrity(db);
 
   try {
     db.prepare(`
@@ -212,6 +227,7 @@ function syncAllSubscriptionStatuses(dbInstance) {
   }
 }
 
+module.exports.ensureSchemaIntegrity = ensureSchemaIntegrity;
 module.exports.syncAllSubscriptionStatuses = syncAllSubscriptionStatuses;
 module.exports.unfreezeSubscriptionRecord = unfreezeSubscriptionRecord;
 module.exports.addDays = addDays;

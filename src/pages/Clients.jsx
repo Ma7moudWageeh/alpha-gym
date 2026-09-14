@@ -163,17 +163,22 @@ const Clients = () => {
 
   const fetchClients = async () => {
     setLoading(true);
-    // Always fetch full roster (status=all) so KPI counts stay accurate;
-    // Expired filter applies the 30-day window client-side / via days_since_expiry.
-    const result = await window.electronAPI.clients.getAll({ search: searchQuery, status: 'all' });
-    if (result.success) {
-      setClients(result.clients);
-      if (result.totalCount !== undefined) {
-        setTotalClients(result.totalCount);
+    try {
+      const apiFn = window.electronAPI?.clients?.getAll || window.electronAPI?.getAllClients;
+      if (apiFn) {
+        const result = await apiFn({ search: searchQuery, status: 'all' });
+        const clientList = Array.isArray(result) ? result : (result?.clients || []);
+        setClients(clientList);
+
+        const total = result?.totalCount !== undefined ? result.totalCount : clientList.length;
+        setTotalClients(total);
+
+        if (result?.counts) {
+          setStatusCounts(result.counts);
+        }
       }
-      if (result.counts) {
-        setStatusCounts(result.counts);
-      }
+    } catch (err) {
+      console.error('Failed to load clients:', err);
     }
     await fetchStats();
     setLoading(false);
@@ -535,7 +540,7 @@ const Clients = () => {
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-3xl font-black font-display text-white uppercase tracking-wider">Clients</h1>
-          <p className="text-slate-400 mt-1 uppercase tracking-widest text-xs font-bold">Total registered athletes: {totalClients}</p>
+          <p className="text-slate-400 mt-1 uppercase tracking-widest text-xs font-bold">Total registered athletes: {totalCount}</p>
         </div>
         <button
           onClick={() => openFormModal()}

@@ -295,6 +295,10 @@ function initSchema(dbInstance = db) {
     insertTransaction();
   }
 
+  if (typeof db.ensureSchemaIntegrity === 'function') {
+    db.ensureSchemaIntegrity(target);
+  }
+
   // Sanitize any missing or empty client codes to enforce unique constraint safety
   sanitizeClientCodes(target);
 }

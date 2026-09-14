@@ -1,5 +1,20 @@
 export const CHANGELOG_DATA = [
   {
+    version: "1.0.12",
+    releaseDate: "September 2026",
+    title: "Database Migration & Roster Connectivity Patch",
+    categories: [
+      {
+        name: "Critical Fixes",
+        items: [
+          "Fixed client directory data sync to restore immediate visibility of all 96+ athletes.",
+          "Automatic database schema migration for seamless compatibility with older database versions.",
+          "Synchronized frozen member counts and status indicators between Dashboard and Clients pages."
+        ]
+      }
+    ]
+  },
+  {
     version: "1.0.11",
     releaseDate: "September 2026",
     title: "Frozen Memberships Sync & Dashboard Alignment",

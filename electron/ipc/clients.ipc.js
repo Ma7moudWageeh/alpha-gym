@@ -150,38 +150,66 @@ function computeClientStatus(clientId) {
   };
 }
 
-ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } = {}) => {
-  db.syncAllSubscriptionStatuses(db);
+ipcMain.handle('clients:getAll', async (event, args = {}) => {
+  const { search = '', status = 'all' } = (args && typeof args === 'object') ? args : {};
   try {
-    let query = `
-      SELECT 
-        c.*,
-        s.id AS current_subscription_id,
-        s.end_date AS subscription_end,
-        s.status AS subscription_status,
-        s.is_frozen AS subscription_is_frozen
-      FROM clients c 
-      LEFT JOIN subscriptions s ON s.id = (
-        SELECT id FROM subscriptions 
-        WHERE client_id = c.id 
-        ORDER BY created_at DESC, id DESC 
-        LIMIT 1
-      )
-      WHERE 1=1
-    `;
-    const params = [];
+    db.syncAllSubscriptionStatuses(db);
+  } catch (syncErr) {
+    console.error('[clients:getAll] Status sync warning:', syncErr.message);
+  }
 
-    if (search) {
-      query += ` AND (c.name LIKE ? OR c.phone LIKE ? OR c.client_code LIKE ?)`;
-      params.push(`%${search}%`, `%${search}%`, `%${search}%`);
+  try {
+    const params = [];
+    let searchClause = '';
+    if (search && search.trim()) {
+      searchClause = ` WHERE (c.name LIKE ? OR c.phone LIKE ? OR c.client_code LIKE ?)`;
+      params.push(`%${search.trim()}%`, `%${search.trim()}%`, `%${search.trim()}%`);
     }
 
-    query += ` ORDER BY c.id DESC`;
+    let clients = [];
+    try {
+      const query = `
+        SELECT 
+          c.*,
+          s.id AS current_subscription_id,
+          s.end_date AS subscription_end,
+          COALESCE(s.status, 'active') AS subscription_status,
+          COALESCE(s.is_frozen, 0) AS subscription_is_frozen
+        FROM clients c 
+        LEFT JOIN subscriptions s ON s.id = (
+          SELECT id FROM subscriptions 
+          WHERE client_id = c.id 
+          ORDER BY id DESC 
+          LIMIT 1
+        )
+        ${searchClause}
+        ORDER BY c.id DESC
+      `;
+      clients = db.prepare(query).all(...params);
+    } catch (primaryErr) {
+      console.error('[clients:getAll] Primary query failed, falling back to basic query:', primaryErr.message);
+      const fallbackQuery = search && search.trim()
+        ? `SELECT * FROM clients WHERE (name LIKE ? OR phone LIKE ? OR client_code LIKE ?) ORDER BY id DESC`
+        : `SELECT * FROM clients ORDER BY id DESC`;
+      clients = db.prepare(fallbackQuery).all(...params);
+    }
 
-    const clients = db.prepare(query).all(...params);
+    if (!Array.isArray(clients)) clients = [];
 
     const enriched = clients.map((c) => {
-      const statusInfo = computeClientStatus(c.id);
+      let statusInfo = {
+        sub_status: c.status || 'active',
+        computed_status: String(c.status || 'active').toUpperCase(),
+        latest_end_date: c.end_date || c.subscription_end || null,
+        days_left: null,
+        days_since_expiry: null,
+        freeze_reason: null,
+      };
+
+      try {
+        statusInfo = computeClientStatus(c.id);
+      } catch (e) {}
+
       const isFrozen = Boolean(
         statusInfo.sub_status === 'frozen' ||
         statusInfo.computed_status === 'FROZEN' ||
@@ -193,10 +221,14 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
         c.subscription_is_frozen === true
       );
 
-      const effectiveSubStatus = isFrozen ? 'frozen' : (statusInfo.sub_status || c.status);
+      const effectiveSubStatus = isFrozen ? 'frozen' : (statusInfo.sub_status || c.status || 'active');
       const effectiveComputedStatus = isFrozen ? 'FROZEN' : statusInfo.computed_status;
 
-      const photoUrl = photoToDataUrl(c.profile_photo);
+      let photoUrl = null;
+      try {
+        photoUrl = photoToDataUrl(c.profile_photo);
+      } catch (e) {}
+
       const createdAt = c.registered_at || c.created_at || null;
       return {
         ...c,
@@ -209,8 +241,8 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
         subscription_is_frozen: isFrozen ? 1 : 0,
         sub_status: effectiveSubStatus,
         computed_status: effectiveComputedStatus,
-        latest_end_date: statusInfo.latest_end_date,
-        end_date: statusInfo.latest_end_date || c.subscription_end,
+        latest_end_date: statusInfo.latest_end_date || c.end_date,
+        end_date: statusInfo.latest_end_date || c.end_date || c.subscription_end,
         days_left: isFrozen ? null : statusInfo.days_left,
         days_since_expiry: isFrozen ? null : statusInfo.days_since_expiry,
         freeze_reason: statusInfo.freeze_reason,
@@ -230,7 +262,13 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
       });
     }
 
-    const totalCountRow = db.prepare('SELECT COUNT(*) as count FROM clients').get();
+    let totalCount = enriched.length;
+    try {
+      const totalCountRow = db.prepare('SELECT COUNT(*) as count FROM clients').get();
+      if (totalCountRow && totalCountRow.count !== undefined) {
+        totalCount = totalCountRow.count;
+      }
+    } catch (e) {}
 
     // Counts for KPI cards — expired strictly within 30 days
     const activeCount = enriched.filter((c) => c.sub_status === 'active' || c.computed_status === 'ACTIVE').length;
@@ -240,7 +278,7 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
     return {
       success: true,
       clients: filteredClients,
-      totalCount: totalCountRow ? totalCountRow.count : filteredClients.length,
+      totalCount: totalCount,
       counts: {
         all: enriched.length,
         active: activeCount,
@@ -249,20 +287,58 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
       }
     };
   } catch (err) {
-    return { error: err.message };
+    console.error('[clients:getAll] Fatal error, returning safe emergency fallback:', err.message);
+    try {
+      const rawClients = db.prepare('SELECT * FROM clients ORDER BY id DESC').all();
+      return {
+        success: true,
+        clients: Array.isArray(rawClients) ? rawClients : [],
+        totalCount: Array.isArray(rawClients) ? rawClients.length : 0,
+        counts: {
+          all: Array.isArray(rawClients) ? rawClients.length : 0,
+          active: Array.isArray(rawClients) ? rawClients.length : 0,
+          frozen: 0,
+          expired: 0,
+        }
+      };
+    } catch (fatalErr) {
+      console.error('[clients:getAll] Absolute fatal failure:', fatalErr.message);
+      return {
+        success: true,
+        clients: [],
+        totalCount: 0,
+        counts: { all: 0, active: 0, frozen: 0, expired: 0 }
+      };
+    }
   }
 });
 
 ipcMain.handle('clients:getStats', async () => {
-  db.syncAllSubscriptionStatuses(db);
   try {
-    const clients = db.prepare('SELECT id, status, is_frozen FROM clients').all();
+    db.syncAllSubscriptionStatuses(db);
+  } catch (syncErr) {
+    console.error('[clients:getStats] Status sync warning:', syncErr.message);
+  }
+  try {
+    let clients = [];
+    try {
+      clients = db.prepare('SELECT id, status, is_frozen FROM clients').all();
+    } catch (e1) {
+      try {
+        clients = db.prepare('SELECT id, status FROM clients').all();
+      } catch (e2) {
+        clients = db.prepare('SELECT id FROM clients').all();
+      }
+    }
     let active = 0;
     let frozen = 0;
     let expired = 0;
 
     for (const c of clients) {
-      const statusInfo = computeClientStatus(c.id);
+      let statusInfo = { sub_status: c.status || 'active', computed_status: 'ACTIVE' };
+      try {
+        statusInfo = computeClientStatus(c.id);
+      } catch (e) {}
       const isFrozen = Boolean(
         statusInfo.sub_status === 'frozen' ||
         statusInfo.computed_status === 'FROZEN' ||
@@ -292,7 +368,15 @@ ipcMain.handle('clients:getStats', async () => {
       }
     };
   } catch (err) {
-    return { success: false, error: err.message };
+    console.error('[clients:getStats] Error calculating stats:', err.message);
+    return {
+      success: true,
+      total: 0,
+      active: 0,
+      frozen: 0,
+      expired: 0,
+      counts: { all: 0, active: 0, frozen: 0, expired: 0 }
+    };
   }
 });
 

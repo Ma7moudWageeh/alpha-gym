@@ -7,17 +7,13 @@ import {
   FileText, RefreshCw, AlertCircle, CheckSquare, Square, X,
   TrendingUp, TrendingDown, Minus, Camera, Trash
 } from 'lucide-react';
-import { formatDateDDMMYYYY, isBirthdayToday, getAvatarGlowClass } from '../utils/dateFormat';
+import { formatDateDDMMYYYY, isBirthdayToday, getAvatarGlowClass, getClientEffectiveStatus, getTodayStr, addDays } from '../utils/dateFormat';
 import DateInput from '../components/DateInput';
+import SettleDebtModal from '../components/modals/SettleDebtModal';
 
 import { WhatsAppContextualButtons } from '../components/common/WhatsAppButton';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
-function addDays(dateStr, days) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
 
 function calcAge(birthDate) {
   if (!birthDate) return null;
@@ -41,18 +37,25 @@ function getInitials(name) {
 }
 
 const StatusBadge = ({ status }) => {
-  const s = status ? String(status).toLowerCase() : '';
+  const s = status ? String(status).toUpperCase() : '';
   const map = {
-    active:   'bg-[#CCFF00]/10 text-[#CCFF00] border-[#CCFF00]/20',
-    expired:  'bg-red-500/10 text-red-400 border-red-500/20',
-    frozen:   'bg-sky-500/10 text-sky-400 border-sky-500/20',
-    inactive: 'bg-slate-800 text-slate-400 border-slate-700',
+    ACTIVE:   'bg-lime-400/10 text-lime-400 border-lime-400/30',
+    EXPIRED:  'bg-rose-500/10 text-rose-500 border-rose-500/30',
+    FROZEN:   'bg-cyan-400/10 text-cyan-400 border-cyan-400/30',
+    INACTIVE: 'bg-slate-500/10 text-slate-400 border-slate-500/30',
+    'NO PLAN': 'bg-slate-500/10 text-slate-400 border-slate-500/30',
   };
-  const label = { active: 'Active', expired: 'Expired', frozen: 'Frozen', inactive: 'Inactive' };
-  const cls = map[s] || 'bg-[#181E2A] text-slate-400 border-slate-600';
+  const label = {
+    ACTIVE: 'Active',
+    EXPIRED: 'Expired',
+    FROZEN: 'Frozen',
+    INACTIVE: 'Inactive',
+    'NO PLAN': 'No Plan',
+  };
+  const cls = map[s] || 'bg-slate-500/10 text-slate-400 border-slate-500/30';
   return (
     <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold border ${cls}`}>
-      {label[s] || 'None'}
+      {label[s] || 'No Plan'}
     </span>
   );
 };
@@ -192,20 +195,44 @@ const SubscriptionModal = ({ client, packages, isRenew, onClose, onSaved }) => {
     package_id: defaultPkg ? defaultPkg.id.toString() : '',
     start_date: new Date().toISOString().split('T')[0],
     price: defaultPkg ? defaultPkg.default_price.toString() : '',
+    paid_amount: defaultPkg ? defaultPkg.default_price.toString() : '',
     note: '',
   });
+  const [stackAfterCurrent, setStackAfterCurrent] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const endDatePreview = (() => {
-    if (!form.package_id || !form.start_date) return null;
-    const pkg = packages.find(p => p.id.toString() === form.package_id);
-    return pkg ? addDays(form.start_date, pkg.duration_days) : null;
+  const cleanPrice = Number(parseFloat(form.price || 0).toFixed(2));
+  const cleanPaid = Number(parseFloat(form.paid_amount || 0).toFixed(2));
+  const planPrice = Math.max(0, cleanPrice);
+  const paidAmount = Math.max(0, cleanPaid);
+  const remainingAmount = Math.max(0, Number((planPrice - paidAmount).toFixed(2)));
+
+  const todayStr = getTodayStr();
+  const currentEndDate = client?.activeSubscription?.end_date || client?.latest_end_date || client?.end_date;
+  const hasActivePlan = Boolean(isRenew && currentEndDate && currentEndDate >= todayStr);
+
+  const pkg = packages.find(p => p.id.toString() === form.package_id);
+  const planDuration = pkg ? pkg.duration_days : 30;
+
+  const computedStartDate = (() => {
+    if (hasActivePlan && stackAfterCurrent) {
+      return addDays(currentEndDate, 1);
+    }
+    return form.start_date || todayStr;
   })();
 
+  const computedEndDate = computedStartDate ? addDays(computedStartDate, planDuration - 1) : null;
+
   const handlePkgSelect = (id) => {
-    const pkg = packages.find(p => p.id.toString() === id);
-    setForm(prev => ({ ...prev, package_id: id, price: pkg ? pkg.default_price.toString() : prev.price }));
+    const p = packages.find(item => item.id.toString() === id);
+    const newPrice = p ? p.default_price.toString() : form.price;
+    setForm(prev => ({
+      ...prev,
+      package_id: id,
+      price: newPrice,
+      paid_amount: newPrice,
+    }));
   };
 
   const submit = async (withPrint = false) => {
@@ -213,13 +240,15 @@ const SubscriptionModal = ({ client, packages, isRenew, onClose, onSaved }) => {
     if (!form.package_id || !form.price) { setError('Package and price are required.'); return; }
     setSaving(true);
 
-    const pkg = packages.find(p => p.id.toString() === form.package_id);
+    const chosenStartDate = hasActivePlan && stackAfterCurrent ? computedStartDate : form.start_date;
+
     const payload = {
       client_id: client.id,
       package_id: parseInt(form.package_id, 10),
-      start_date: form.start_date,
-      price: parseFloat(form.price),
-      paid_amount: parseFloat(form.price),
+      start_date: chosenStartDate,
+      stack_after_current: stackAfterCurrent,
+      price: planPrice,
+      paid_amount: paidAmount,
       note: form.note,
     };
 
@@ -241,11 +270,16 @@ const SubscriptionModal = ({ client, packages, isRenew, onClose, onSaved }) => {
         client_area: client.area || '',
         client_code: client.client_code || '',
         package_name: pkg ? pkg.title : 'Subscription',
-        amount: payload.price,
-        paid_amount: payload.price,
-        start_date: form.start_date,
-        end_date: res.end_date || endDatePreview || '',
-        payment_date: form.start_date,
+        amount: paidAmount,
+        paid_amount: paidAmount,
+        paidAmount: paidAmount,
+        price: planPrice,
+        planPrice: planPrice,
+        remaining_amount: remainingAmount,
+        remainingAmount: remainingAmount,
+        start_date: res.start_date || form.start_date,
+        end_date: res.end_date || computedEndDate || '',
+        payment_date: new Date().toISOString().split('T')[0],
       });
     }
 
@@ -269,24 +303,94 @@ const SubscriptionModal = ({ client, packages, isRenew, onClose, onSaved }) => {
               {packages.map(p => <option key={p.id} value={p.id}>{p.title} ({p.duration_days}d) — {p.default_price} EGP</option>)}
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+
+          {hasActivePlan && (
+            <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-300 text-xs leading-relaxed">
+              ℹ️ <strong>Early Renewal:</strong> Current subscription active until <strong>{formatDateDDMMYYYY(currentEndDate)}</strong>. New plan will start on <strong>{formatDateDDMMYYYY(computedStartDate)}</strong> and expire on <strong>{formatDateDDMMYYYY(computedEndDate)}</strong> (Total days extended: +{planDuration}).
+            </div>
+          )}
+
+          {hasActivePlan && (
+            <div className="space-y-2 p-3 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-xs">
+              <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                <input
+                  type="radio"
+                  name="profile_renew_stack"
+                  checked={stackAfterCurrent}
+                  onChange={() => setStackAfterCurrent(true)}
+                  className="text-[#CCFF00] focus:ring-[#CCFF00]"
+                />
+                <span className="font-semibold text-white">Stack after current plan <span className="text-[#CCFF00] text-[10px] font-bold">(Recommended)</span></span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                <input
+                  type="radio"
+                  name="profile_renew_stack"
+                  checked={!stackAfterCurrent}
+                  onChange={() => setStackAfterCurrent(false)}
+                  className="text-[#CCFF00] focus:ring-[#CCFF00]"
+                />
+                <span>Start immediately from today</span>
+              </label>
+            </div>
+          )}
+
+          <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1.5">
               <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Start Date</label>
               <DateInput
-                value={form.start_date}
+                value={hasActivePlan && stackAfterCurrent ? computedStartDate : form.start_date}
                 onChange={(iso) => setForm(p => ({ ...p, start_date: iso }))}
-                className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors font-mono"
+                disabled={hasActivePlan && stackAfterCurrent}
+                className={`w-full px-3 py-2 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors font-mono text-sm ${hasActivePlan && stackAfterCurrent ? 'opacity-70 cursor-not-allowed' : ''}`}
               />
             </div>
             <div className="space-y-1.5">
               <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Price (EGP)</label>
-              <input type="number" value={form.price} onChange={e => setForm(p => ({ ...p, price: e.target.value }))}
-                className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors" />
+              <input
+                type="number"
+                value={form.price}
+                onChange={e => {
+                  const val = e.target.value;
+                  setForm(p => ({
+                    ...p,
+                    price: val,
+                    paid_amount: p.paid_amount === p.price ? val : p.paid_amount
+                  }));
+                }}
+                className="w-full px-3 py-2 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Paid (EGP)</label>
+              <input
+                type="number"
+                value={form.paid_amount}
+                onChange={e => setForm(p => ({ ...p, paid_amount: e.target.value }))}
+                className="w-full px-3 py-2 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
+              />
             </div>
           </div>
-          {endDatePreview && (
+
+          {/* Pricing Breakdown Box */}
+          <div className="p-3 bg-[#0B0E14] border border-[#222B3D] rounded-xl space-y-1 text-xs">
+            <div className="flex justify-between text-slate-400">
+              <span>Package Price:</span>
+              <span className="font-semibold text-white">{planPrice} EGP</span>
+            </div>
+            <div className="flex justify-between text-slate-400">
+              <span>Paid Amount:</span>
+              <span className="font-semibold text-white">{paidAmount} EGP</span>
+            </div>
+            <div className={`flex justify-between border-t border-[#222B3D] pt-1 ${remainingAmount > 0 ? 'text-amber-400 font-bold' : 'text-slate-400'}`}>
+              <span>Remaining Debt:</span>
+              <span>{remainingAmount} EGP</span>
+            </div>
+          </div>
+
+          {computedEndDate && (
             <div className="flex items-center gap-2 text-sm text-[#CCFF00] bg-[#CCFF00]/10 border border-[#CCFF00]/20 px-3 py-2 rounded">
-              <Calendar className="w-4 h-4" /> Ends on: <strong>{formatDateDDMMYYYY(endDatePreview)}</strong>
+              <Calendar className="w-4 h-4" /> Ends on: <strong>{formatDateDDMMYYYY(computedEndDate)}</strong>
             </div>
           )}
           <div className="space-y-1.5">
@@ -307,6 +411,8 @@ const SubscriptionModal = ({ client, packages, isRenew, onClose, onSaved }) => {
     </div>
   );
 };
+
+
 
 // ─── WEIGHT MODAL ──────────────────────────────────────────────────────────────
 const WeightModal = ({ client, onClose, onSaved }) => {
@@ -379,6 +485,8 @@ const ClientProfile = () => {
 
   const [showEditModal, setShowEditModal] = useState(false);
   const [showSubModal, setShowSubModal] = useState(false);
+  const [isDebtModalOpen, setIsDebtModalOpen] = useState(false);
+  const [toastMessage, setToastMessage] = useState('');
   const [showWeightModal, setShowWeightModal] = useState(false);
   const [showFreezeModal, setShowFreezeModal] = useState(false);
   const [freezeReason, setFreezeReason] = useState('');
@@ -386,6 +494,13 @@ const ClientProfile = () => {
   const [freezeDays, setFreezeDays] = useState('7');
   const [freezeError, setFreezeError] = useState('');
   const [freezing, setFreezing] = useState(false);
+
+  useEffect(() => {
+    if (toastMessage) {
+      const timer = setTimeout(() => setToastMessage(''), 4000);
+      return () => clearTimeout(timer);
+    }
+  }, [toastMessage]);
 
   const fetchClient = useCallback(async () => {
     const res = await window.electronAPI.clients.getById({ id: parseInt(id, 10) });
@@ -557,7 +672,7 @@ const ClientProfile = () => {
     }));
   }
   const age = calcAge(client.date_of_birth);
-  const profileStatus = client.client_status || (activeSub ? activeSub.status : null);
+  const profileStatus = getClientEffectiveStatus(client);
 
   // ── render ──────────────────────────────────────────────────────────────────
   return (
@@ -683,7 +798,13 @@ const ClientProfile = () => {
             <p className="text-[10px] text-slate-500 font-medium uppercase tracking-widest">
               {photoUrl && !photoBroken ? 'Click image to expand preview' : 'Click container to select photo'}
             </p>
-            {profileStatus === 'frozen' && (activeSub?.freeze_reason || client.freeze_reason) && (
+            {profileStatus === 'PENDING' && (
+              <div className="w-full mt-2 p-3 rounded-xl bg-purple-500/10 border border-purple-500/30 text-left">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-purple-400 mb-1">Pending Activation</p>
+                <p className="text-xs text-purple-200">Subscription starts automatically on member's first gym check-in.</p>
+              </div>
+            )}
+            {(profileStatus === 'FROZEN' || profileStatus === 'frozen') && (activeSub?.freeze_reason || client.freeze_reason) && (
               <div className="w-full mt-2 p-3 rounded-xl bg-sky-500/10 border border-sky-500/30 text-left">
                 <p className="text-[10px] font-bold uppercase tracking-widest text-sky-400 mb-1">Freeze Reason</p>
                 <p className="text-sm text-sky-100">{activeSub?.freeze_reason || client.freeze_reason}</p>
@@ -759,6 +880,27 @@ const ClientProfile = () => {
 
         {/* ── RIGHT COLUMN ── */}
         <div className="lg:col-span-2 space-y-4">
+          {/* Outstanding Balance Warning Card */}
+          {Number(client.remaining_debt) > 0 && (
+            <div className="flex items-center justify-between p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 mb-4">
+              <div className="flex items-center gap-3">
+                <span className="text-2xl">💰</span>
+                <div>
+                  <h4 className="font-bold text-sm">Outstanding Client Balance</h4>
+                  <p className="text-xs text-amber-400/80">
+                    Total Due: <span className="font-bold text-base text-amber-300">{client.remaining_debt} EGP</span>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsDebtModalOpen(true)}
+                className="px-4 py-2 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg transition-colors shadow-sm cursor-pointer"
+              >
+                Settle Balance
+              </button>
+            </div>
+          )}
+
           {/* Active Subscription Banner */}
           {activeSub && (
             <div className="card p-5 bg-brand-panel">
@@ -841,6 +983,8 @@ const ClientProfile = () => {
                       <th className="px-5 py-3 font-medium">Start</th>
                       <th className="px-5 py-3 font-medium">End</th>
                       <th className="px-5 py-3 font-medium">Price</th>
+                      <th className="px-5 py-3 font-medium">Paid</th>
+                      <th className="px-5 py-3 font-medium">Remaining</th>
                       <th className="px-5 py-3 font-medium">Status</th>
                     </tr>
                   </thead>
@@ -850,11 +994,19 @@ const ClientProfile = () => {
                         <td className="px-5 py-3.5 font-medium text-white">{sub.package_title || '—'}</td>
                         <td className="px-5 py-3.5 text-slate-300 font-mono">{formatDateDDMMYYYY(sub.start_date)}</td>
                         <td className="px-5 py-3.5 text-slate-300 font-mono">{formatDateDDMMYYYY(sub.end_date)}</td>
-                        <td className="px-5 py-3.5 text-[#CCFF00] font-semibold">{sub.price} EGP</td>
+                        <td className="px-5 py-3.5 text-white font-semibold">{sub.price || 0} EGP</td>
+                        <td className="px-5 py-3.5 text-[#CCFF00] font-semibold">{sub.paid_amount !== undefined && sub.paid_amount !== null ? sub.paid_amount : (sub.price || 0)} EGP</td>
+                        <td className="px-5 py-3.5 font-semibold">
+                          {Number(sub.remaining_amount) > 0 ? (
+                            <span className="text-amber-400 font-bold">{sub.remaining_amount} EGP</span>
+                          ) : (
+                            <span className="text-slate-500 font-normal">0 EGP</span>
+                          )}
+                        </td>
                         <td className="px-5 py-3.5"><StatusBadge status={sub.status} /></td>
                       </tr>
                     )) : (
-                      <tr><td colSpan={5} className="px-5 py-10 text-center text-slate-500">No subscriptions yet.</td></tr>
+                      <tr><td colSpan={7} className="px-5 py-10 text-center text-slate-500">No subscriptions yet.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -993,6 +1145,19 @@ const ClientProfile = () => {
             setShowSubModal(false);
             window.dispatchEvent(new Event('dashboard-refresh'));
             fetchClient();
+          }}
+        />
+      )}
+
+      {isDebtModalOpen && (
+        <SettleDebtModal
+          client={client}
+          onClose={() => setIsDebtModalOpen(false)}
+          onSettled={async () => {
+            setIsDebtModalOpen(false);
+            await fetchClient();
+            window.dispatchEvent(new Event('dashboard-refresh'));
+            setToastMessage('Balance settled successfully and ledger updated.');
           }}
         />
       )}
@@ -1144,6 +1309,13 @@ const ClientProfile = () => {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-2 px-4 py-3 bg-emerald-500/20 border border-emerald-500/40 text-emerald-400 rounded-xl shadow-2xl backdrop-blur-md text-sm font-semibold">
+          <span>✓</span> {toastMessage}
         </div>
       )}
     </div>

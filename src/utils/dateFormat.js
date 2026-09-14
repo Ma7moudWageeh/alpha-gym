@@ -98,6 +98,15 @@ export function isBirthdayToday(dobString) {
 }
 
 /**
+ * Checks if a client's birthday is today.
+ */
+export function isClientBirthdayToday(client) {
+  if (!client) return false;
+  const dob = client.date_of_birth || client.dob || client.birth_date;
+  return isBirthdayToday(dob);
+}
+
+/**
  * Checks if a given date string matches today's full date (year, month, day).
  */
 export function isTodayDate(dateStr) {
@@ -112,53 +121,134 @@ export function isTodayDate(dateStr) {
   );
 }
 
+export function getTodayStr() {
+  return toLocalDateString(new Date());
+}
+
+export function addDays(dateInput, days) {
+  const baseStr = toLocalDateString(dateInput);
+  if (!baseStr) return '';
+  const [y, m, d] = baseStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return dt.toISOString().split('T')[0];
+}
+
+/**
+ * Normalizes any date input to YYYY-MM-DD string in local time to eliminate UTC shift.
+ */
+export function toLocalDateString(dateInput) {
+  if (!dateInput) return null;
+  if (typeof dateInput === 'string') {
+    const trimmed = dateInput.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    const dmy = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
+  }
+  const d = new Date(dateInput);
+  if (isNaN(d.getTime())) return null;
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Calculates calendar-day difference between end date and today:
+ * > 0  : Active with N days remaining
+ * === 0: Expires today
+ * < 0  : Lapsed / expired (e.g. -1 means expired yesterday)
+ * null : No subscription / missing end date
+ */
+export function calculateDaysRemaining(endDateInput) {
+  if (!endDateInput) return null;
+  const endStr = toLocalDateString(endDateInput);
+  const todayStr = toLocalDateString(new Date());
+  if (!endStr || !todayStr) return null;
+
+  const [y1, m1, d1] = endStr.split('-').map(Number);
+  const [y2, m2, d2] = todayStr.split('-').map(Number);
+
+  const endUtc = Date.UTC(y1, m1 - 1, d1);
+  const todayUtc = Date.UTC(y2, m2 - 1, d2);
+
+  return Math.round((endUtc - todayUtc) / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Single Source of Truth for Client Lifecycle Status.
+ * MUST be imported and utilized uniformly across all components.
+ */
+export function getClientEffectiveStatus(client) {
+  if (!client) return 'INACTIVE';
+
+  const rawStatus = String(client.status || '').toLowerCase();
+  if (rawStatus === 'frozen' || client.is_frozen) return 'FROZEN';
+
+  const endDate = client.end_date || client.subscription_end || client.latest_end_date;
+  if (!endDate) return 'NO PLAN';
+
+  const daysRemaining = calculateDaysRemaining(endDate);
+  if (daysRemaining === null) return 'NO PLAN';
+
+  if (daysRemaining < 0) {
+    return daysRemaining >= -30 ? 'EXPIRED' : 'INACTIVE';
+  }
+
+  return 'ACTIVE';
+}
+
+/**
+ * Determines whether a client was registered today.
+ * Returns true strictly if created today AND not expired/inactive.
+ */
+export function isNewClientToday(client) {
+  const createdDate = client?.created_at || client?.registered_at;
+  if (!createdDate) return false;
+  const createdStr = toLocalDateString(createdDate);
+  const todayStr = toLocalDateString(new Date());
+  if (createdStr !== todayStr) return false;
+
+  const status = getClientEffectiveStatus(client);
+  return status !== 'EXPIRED' && status !== 'INACTIVE';
+}
+
 /**
  * Resolves the dynamic glow ring and border for client avatars
  * based on the strict lifecycle hierarchy:
  * 1. Birthday Today (Gold / 1 Day Only)
- * 2. New Client (Glowing White / Day 1 Only)
- * 3. Expiring Soon (Amber Orange / 1 Day Only)
- * 4. Expired (Rose Red / Active until renewed within 30-day window)
- * 5. Default Active/Inactive (Neutral Slate)
+ * 2. Pending Activation (Subtle Purple/Indigo without glow)
+ * 3. Expired Subscription within 30 days (Rose Red)
+ * 4. Expiring Soon - Exactly 1 day remaining (Deep Orange)
+ * 5. New Client Registered Today (Pure White)
  */
 export function getAvatarGlowClass(client) {
-  if (!client) return "border border-slate-800 ring-0 shadow-none";
+  if (!client) return "";
 
-  // 1. Birthday Today (Celebratory Top Priority)
-  if (isBirthdayToday(client.date_of_birth)) {
+  // Priority 1: Birthday Today (Gold)
+  if (isClientBirthdayToday(client)) {
     return "ring-2 ring-yellow-400 shadow-[0_0_14px_rgba(250,204,21,0.35)] border-transparent";
   }
 
-  const daysLeft = client.days_left !== undefined && client.days_left !== null
-    ? Number(client.days_left)
-    : client.days_remaining !== undefined && client.days_remaining !== null
-      ? Number(client.days_remaining)
-      : null;
+  const status = getClientEffectiveStatus(client);
 
-  const subStatus = String(client.sub_status ?? client.status ?? "").toLowerCase();
-  const compStatus = String(client.computed_status ?? "").toUpperCase();
-
-  const isOverdue = subStatus === "expired" || compStatus === "EXPIRED" || (daysLeft !== null && daysLeft <= 0);
-  const isWithin30Days = daysLeft === null || (Math.abs(daysLeft) <= 30 && daysLeft >= -30);
-
-  // 2. Expired (Must take precedence over New Client if membership is already lapsed)
-  if (isOverdue && isWithin30Days) {
+  // Priority 2: Expired Subscription within 30 days (Rose Red)
+  if (status === 'EXPIRED') {
     return "ring-2 ring-rose-500 shadow-[0_0_12px_rgba(244,63,94,0.35)] border-transparent";
   }
 
-  // 3. Expiring Soon (1 Day Remaining)
-  if (daysLeft === 1) {
+  // Priority 3: Expiring Soon - Exactly 1 day remaining (Deep Orange)
+  const endDate = client.end_date || client.subscription_end || client.latest_end_date || client.activeSubscription?.end_date;
+  const daysRemaining = calculateDaysRemaining(endDate);
+  if (status === 'ACTIVE' && daysRemaining === 1) {
     return "ring-2 ring-orange-500 shadow-[0_0_14px_rgba(249,115,22,0.4)] border-transparent";
   }
 
-  // 4. New Client (Only eligible if NOT expired/overdue)
-  const registrationDate = client.created_at || client.registered_at || client.join_date;
-  if (registrationDate && isTodayDate(registrationDate) && !isOverdue) {
+  // Priority 4: New Client Registered Today (Pure White)
+  if (isNewClientToday(client)) {
     return "ring-2 ring-white shadow-[0_0_14px_rgba(255,255,255,0.45)] border-transparent";
   }
 
-  // 5. Default Neutral State
-  return "border border-slate-800 ring-0 shadow-none";
+  return "";
 }
 
 export default {
@@ -166,7 +256,13 @@ export default {
   formatDateTimeDDMMYYYY,
   parseInputDate,
   isBirthdayToday,
+  isClientBirthdayToday,
   isTodayDate,
+  toLocalDateString,
+  getTodayStr,
+  addDays,
+  calculateDaysRemaining,
+  getClientEffectiveStatus,
+  isNewClientToday,
   getAvatarGlowClass,
 };
-

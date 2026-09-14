@@ -23,6 +23,102 @@ try {
     db.prepare("UPDATE clients SET status = 'expired' WHERE UPPER(status) = 'OVERDUE'").run();
   } catch (e) {}
 
+  // Migration: Debt tracking & settlement
+  const addColumnIfNotExists = (table, columnDef) => {
+    try {
+      db.prepare(`ALTER TABLE ${table} ADD COLUMN ${columnDef}`).run();
+    } catch (error) {
+      if (!error.message.includes("duplicate column name")) {
+        console.error(`Migration error on ${table}:`, error.message);
+      }
+    }
+  };
+
+  addColumnIfNotExists("clients", "remaining_debt REAL DEFAULT 0");
+  addColumnIfNotExists("clients", "birth_date TEXT");
+  addColumnIfNotExists("clients", "created_at DATETIME");
+  addColumnIfNotExists("subscriptions", "plan_id INTEGER");
+  addColumnIfNotExists("subscriptions", "price REAL DEFAULT 0");
+  addColumnIfNotExists("subscriptions", "paid_amount REAL DEFAULT 0");
+  addColumnIfNotExists("subscriptions", "remaining_amount REAL DEFAULT 0");
+  addColumnIfNotExists("subscriptions", "duration_days INTEGER DEFAULT 30");
+  addColumnIfNotExists("subscriptions", "is_deferred INTEGER DEFAULT 0");
+  addColumnIfNotExists("clients", "is_pending_activation INTEGER DEFAULT 0");
+  addColumnIfNotExists("clients", "start_date TEXT");
+  addColumnIfNotExists("clients", "end_date TEXT");
+  addColumnIfNotExists("clients", "status TEXT DEFAULT 'active'");
+
+  try {
+    db.prepare(`
+      CREATE VIEW IF NOT EXISTS plans AS 
+      SELECT id, title as name, title, default_price as price, default_price, duration_days, is_active, created_at 
+      FROM packages
+    `).run();
+  } catch (e) {}
+
+  // Migration: Table relaxation for subscriptions (allow NULL start_date/end_date)
+  try {
+    const subTableInfo = db.prepare('PRAGMA table_info(subscriptions)').all();
+    const startCol = subTableInfo.find(c => c.name === 'start_date');
+    if (startCol && startCol.notnull === 1) {
+      db.transaction(() => {
+        db.exec(`
+          CREATE TABLE subscriptions_v2 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER NOT NULL REFERENCES clients(id) ON DELETE CASCADE,
+            package_id INTEGER REFERENCES packages(id),
+            start_date TEXT,
+            end_date TEXT,
+            duration_days INTEGER DEFAULT 30,
+            price REAL DEFAULT 0,
+            paid_amount REAL DEFAULT 0,
+            remaining_amount REAL DEFAULT 0,
+            is_deferred INTEGER DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            frozen_on TEXT,
+            frozen_days INTEGER DEFAULT 0,
+            freeze_reason TEXT,
+            freeze_mode TEXT,
+            freeze_end_date TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          INSERT INTO subscriptions_v2 (id, client_id, package_id, start_date, end_date, duration_days, price, paid_amount, remaining_amount, is_deferred, status, frozen_on, frozen_days, freeze_reason, freeze_mode, freeze_end_date, created_at)
+          SELECT id, client_id, package_id, start_date, end_date, COALESCE(duration_days, 30), COALESCE(price, 0), COALESCE(paid_amount, 0), COALESCE(remaining_amount, 0), COALESCE(is_deferred, 0), status, frozen_on, frozen_days, freeze_reason, freeze_mode, freeze_end_date, created_at FROM subscriptions;
+          DROP TABLE subscriptions;
+          ALTER TABLE subscriptions_v2 RENAME TO subscriptions;
+        `);
+      })();
+    }
+  } catch (e) {}
+
+  try {
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS transactions (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id   INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+        type        TEXT    NOT NULL,
+        amount      REAL    NOT NULL,
+        category    TEXT,
+        date        TEXT,
+        notes       TEXT,
+        created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+  } catch (e) {}
+
+  try {
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS checkins (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_id    INTEGER REFERENCES clients(id) ON DELETE CASCADE,
+        checkin_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+        notes        TEXT,
+        created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `).run();
+    db.prepare(`CREATE INDEX IF NOT EXISTS idx_checkins_client ON checkins(client_id)`).run();
+  } catch (e) {}
+
 } catch (err) {
   console.error('Failed to initialize database:', err);
 }

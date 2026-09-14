@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import {
@@ -6,17 +6,13 @@ import {
   ChevronRight, Calendar, AlertCircle, CheckSquare, Square,
   Users, Activity, Snowflake, MessageCircle
 } from 'lucide-react';
-import { formatDateDDMMYYYY, getAvatarGlowClass } from '../utils/dateFormat';
+import { formatDateDDMMYYYY, getAvatarGlowClass, getClientEffectiveStatus, getTodayStr, addDays } from '../utils/dateFormat';
 import DateInput from '../components/DateInput';
+import SettleDebtModal from '../components/modals/SettleDebtModal';
 import { openClientWhatsApp } from '../utils/whatsapp';
 import { WhatsAppContextualButtons } from '../components/common/WhatsAppButton';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
-function addDays(dateStr, days) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
-}
 
 function calcAge(birthDate) {
   if (!birthDate) return '';
@@ -35,8 +31,8 @@ const EMPTY_CLIENT_FORM = {
 };
 
 const EMPTY_SUB_FORM = {
-  package_id: '', start_date: new Date().toISOString().split('T')[0],
-  price: '', note: '',
+  package_id: '', start_date: getTodayStr(),
+  price: '', paid_amount: '', note: '',
 };
 
 function getInitials(name) {
@@ -72,34 +68,36 @@ function ClientAvatar({ client, name }) {
 
 // ─── status badge ──────────────────────────────────────────────────────────────
 const getStatusBadge = (status) => {
-  switch (status?.toLowerCase()) {
-    case 'active':
+  const norm = String(status || '').toUpperCase();
+  switch (norm) {
+    case 'ACTIVE':
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-[#CCFF00]/10 text-[#CCFF00] border border-[#CCFF00]/30">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#CCFF00] mr-1.5"></span> ACTIVE
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-lime-400/10 text-lime-400 border border-lime-400/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-lime-400 mr-1.5"></span> ACTIVE
         </span>
       );
-    case 'expired':
+    case 'EXPIRED':
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-[#EF4444]/10 text-[#EF4444] border border-[#EF4444]/30">
-          <span className="w-1.5 h-1.5 rounded-full bg-[#EF4444] mr-1.5"></span> EXPIRED
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-rose-500/10 text-rose-500 border border-rose-500/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 mr-1.5"></span> EXPIRED
         </span>
       );
-    case 'frozen':
+    case 'FROZEN':
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-sky-500/10 text-sky-400 border border-sky-500/30">
-          <span className="w-1.5 h-1.5 rounded-full bg-sky-400 mr-1.5"></span> FROZEN
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-cyan-400/10 text-cyan-400 border border-cyan-400/30">
+          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 mr-1.5"></span> FROZEN
         </span>
       );
-    case 'inactive':
+    case 'INACTIVE':
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-slate-800 text-slate-400 border border-slate-700">
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-slate-500/10 text-slate-400 border border-slate-500/30">
           <span className="w-1.5 h-1.5 rounded-full bg-slate-500 mr-1.5"></span> INACTIVE
         </span>
       );
+    case 'NO PLAN':
     default:
       return (
-        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-slate-800 text-slate-400 border border-slate-700">
+        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-widest bg-slate-500/10 text-slate-400 border border-slate-500/30">
           <span className="w-1.5 h-1.5 rounded-full bg-slate-500 mr-1.5"></span> NO PLAN
         </span>
       );
@@ -128,7 +126,6 @@ const Clients = () => {
     }
   }, [searchParams]);
 
-  // Form modal
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
   const [clientFormData, setClientFormData] = useState(EMPTY_CLIENT_FORM);
@@ -137,6 +134,10 @@ const Clients = () => {
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [newlyCreatedClient, setNewlyCreatedClient] = useState(null); // for post-create WA welcome
+  const [clientToSettle, setClientToSettle] = useState(null);
+
+  const activeTab = (statusFilter || 'all').toUpperCase();
+  const setActiveTab = (tab) => setStatusFilter(tab.toLowerCase());
 
   // ── fetch ──────────────────────────────────────────────────────────────────
   const fetchStats = async () => {
@@ -169,6 +170,21 @@ const Clients = () => {
     setLoading(false);
   };
 
+  const handleDebtSettled = async (clientId, settledAmount, newRemainingDebt) => {
+    setClients((prevClients) =>
+      prevClients.map((client) => {
+        if (client.id === clientId) {
+          const remaining = newRemainingDebt !== undefined
+            ? Math.max(0, newRemainingDebt)
+            : Math.max(0, Number(client.remaining_debt || 0) - Number(settledAmount || 0));
+          return { ...client, remaining_debt: remaining };
+        }
+        return client;
+      })
+    );
+    await fetchClients();
+  };
+
   const fetchPackages = async () => {
     const result = await window.electronAPI.packages.getAll();
     if (result.success) setPackages(result.packages.filter(p => p.is_active === 1));
@@ -190,59 +206,67 @@ const Clients = () => {
     return () => clearTimeout(id);
   }, [searchQuery]);
 
-  const filteredClients = clients.filter((client) => {
-    const daysLeft = client.days_left !== undefined && client.days_left !== null
-      ? Number(client.days_left)
-      : client.days_remaining !== undefined && client.days_remaining !== null
-        ? Number(client.days_remaining)
-        : null;
+  const debtCount = useMemo(() => {
+    return clients.filter((c) => Number(c.remaining_debt || 0) > 0).length;
+  }, [clients]);
 
-    const compStatus = String(client.computed_status ?? '').toUpperCase();
-    const subStatus = String(client.sub_status ?? client.status ?? '').toLowerCase();
-
-    if (statusFilter === 'expired') {
-      // Must be overdue AND within the 30-day threshold
-      if (daysLeft !== null) {
-        return daysLeft <= 0 && daysLeft >= -30;
+  const displayedClients = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    let result = clients.filter((client) => {
+      if (q) {
+        const matchesName = (client.name || '').toLowerCase().includes(q);
+        const matchesPhone = (client.phone || '').includes(q);
+        const matchesCode = (client.client_code || '').toLowerCase().includes(q);
+        const matchesId = String(client.id || '').includes(q);
+        if (!matchesName && !matchesPhone && !matchesCode && !matchesId) return false;
       }
-      return compStatus === 'EXPIRED' || subStatus === 'expired';
+
+      if (activeTab === 'ACTIVE') {
+        return getClientEffectiveStatus(client) === 'ACTIVE';
+      }
+      if (activeTab === 'FROZEN') {
+        return getClientEffectiveStatus(client) === 'FROZEN';
+      }
+      if (activeTab === 'EXPIRED') {
+        return getClientEffectiveStatus(client) === 'EXPIRED';
+      }
+      if (activeTab === 'DEBT') {
+        return Number(client.remaining_debt || 0) > 0;
+      }
+      return true; // 'ALL' tab
+    });
+
+    if (activeTab === 'DEBT') {
+      result.sort((a, b) => {
+        const debtDiff = Number(b.remaining_debt || 0) - Number(a.remaining_debt || 0);
+        if (debtDiff !== 0) return debtDiff;
+        return (b.id || 0) - (a.id || 0);
+      });
+    } else if (activeTab === 'EXPIRED') {
+      result.sort((a, b) => {
+        const dateA = new Date(a.end_date || a.subscription_end || a.latest_end_date || 0).getTime();
+        const dateB = new Date(b.end_date || b.subscription_end || b.latest_end_date || 0).getTime();
+        if (dateB !== dateA) return dateB - dateA;
+        return (b.id || 0) - (a.id || 0);
+      });
+    } else {
+      result.sort((a, b) => (b.id || 0) - (a.id || 0));
     }
 
-    if (statusFilter === 'all') {
-      // Retains all clients regardless of how long ago they expired
-      return true;
-    }
+    return result;
+  }, [clients, activeTab, searchQuery]);
 
-    if (statusFilter === 'active') {
-      return subStatus === 'active' || compStatus === 'ACTIVE';
-    }
-    if (statusFilter === 'frozen') {
-      return subStatus === 'frozen' || compStatus === 'FROZEN';
-    }
-    return subStatus === statusFilter;
-  });
+  const totalCount = clients.length > 0 ? clients.length : (statusCounts.all || totalClients || 0);
+  const activeCount = clients.length > 0 ? clients.filter((c) => getClientEffectiveStatus(c) === 'ACTIVE').length : (statusCounts.active || 0);
+  const frozenCount = clients.length > 0 ? clients.filter((c) => getClientEffectiveStatus(c) === 'FROZEN').length : (statusCounts.frozen || 0);
+  const expiredCount = clients.length > 0 ? clients.filter((c) => getClientEffectiveStatus(c) === 'EXPIRED').length : (statusCounts.expired || 0);
 
-  const expiredWithin30DaysCount = clients.filter((c) => {
-    const days = Number(c.days_left ?? c.days_remaining);
-    if (!Number.isNaN(days) && c.days_left !== null && c.days_left !== undefined) {
-      return days <= 0 && days >= -30;
-    }
-    const compStatus = String(c.computed_status ?? '').toUpperCase();
-    const subStatus = String(c.sub_status ?? c.status ?? '').toLowerCase();
-    return compStatus === 'EXPIRED' || subStatus === 'expired';
-  }).length;
-
-  const totalCount = statusCounts.all || totalClients;
-  const activeCount = statusCounts.active || 0;
-  const frozenCount = statusCounts.frozen || 0;
-  const expiredCount = expiredWithin30DaysCount || statusCounts.expired || 0;
-
-  // ── computed end-date preview ───────────────────────────────────────────────
   const endDatePreview = (() => {
     if (!addInitialMembership || !subFormData.package_id || !subFormData.start_date) return null;
     const pkg = packages.find(p => p.id.toString() === subFormData.package_id);
     if (!pkg) return null;
-    return addDays(subFormData.start_date, pkg.duration_days);
+    const duration = pkg.duration_days || 30;
+    return addDays(subFormData.start_date, duration - 1);
   })();
 
   // ── open form ──────────────────────────────────────────────────────────────
@@ -273,6 +297,7 @@ const Clients = () => {
         package_id: defaultPkg ? defaultPkg.id.toString() : '',
         start_date: new Date().toISOString().split('T')[0],
         price: defaultPkg ? defaultPkg.default_price.toString() : '',
+        paid_amount: defaultPkg ? defaultPkg.default_price.toString() : '',
         note: '',
       });
     }
@@ -286,6 +311,7 @@ const Clients = () => {
       ...prev,
       package_id: pkgId,
       price: pkg ? pkg.default_price.toString() : prev.price,
+      paid_amount: pkg ? pkg.default_price.toString() : prev.paid_amount,
     }));
   };
 
@@ -356,12 +382,23 @@ const Clients = () => {
       // Optional initial membership
       if (addInitialMembership && subFormData.package_id) {
         const pkg = packages.find(p => p.id.toString() === subFormData.package_id);
+        const cleanPrice = Number(parseFloat(subFormData.price || 0).toFixed(2));
+        const cleanPaid = Number(parseFloat(subFormData.paid_amount !== '' && subFormData.paid_amount !== undefined ? subFormData.paid_amount : cleanPrice).toFixed(2));
+        const planPrice = Math.max(0, cleanPrice);
+        const paidAmount = Math.max(0, cleanPaid);
+        const remainingAmount = Math.max(0, Number((planPrice - paidAmount).toFixed(2)));
+
         const subRes = await window.electronAPI.subscriptions.create({
           client_id: clientId,
           package_id: parseInt(subFormData.package_id, 10),
+          plan_id: parseInt(subFormData.package_id, 10),
           start_date: subFormData.start_date,
-          price: parseFloat(subFormData.price),
-          paid_amount: parseFloat(subFormData.price),
+          price: planPrice,
+          planPrice: planPrice,
+          paid_amount: paidAmount,
+          paidAmount: paidAmount,
+          remaining_amount: remainingAmount,
+          remainingAmount: remainingAmount,
           note: subFormData.note,
         });
 
@@ -370,22 +407,29 @@ const Clients = () => {
           return;
         }
 
-        // Auto-print receipt
-        window.electronAPI.print.receipt({
-          payment_id: subRes.subscription_id || clientId,
-          client_name: clientFormData.name,
-          client_phone: clientFormData.phone,
-          client_age: calcAge(clientFormData.birth_date),
-          client_weight: clientFormData.weight_kg,
-          client_area: clientFormData.area || '',
-          client_code: clientCode,
-          package_name: pkg ? pkg.title : 'Subscription',
-          amount: parseFloat(subFormData.price),
-          paid_amount: parseFloat(subFormData.price),
-          start_date: subFormData.start_date,
-          end_date: subRes.end_date || endDatePreview || '',
-          payment_date: subFormData.start_date,
-        });
+        // Auto-print receipt if requested
+        if (printAfter) {
+          window.electronAPI.print.receipt({
+            payment_id: subRes.subscription_id || clientId,
+            client_name: clientFormData.name,
+            client_phone: clientFormData.phone,
+            client_age: calcAge(clientFormData.birth_date),
+            client_weight: clientFormData.weight_kg,
+            client_area: clientFormData.area || '',
+            client_code: clientCode,
+            package_name: pkg ? pkg.title : 'Subscription',
+            amount: planPrice,
+            price: planPrice,
+            planPrice: planPrice,
+            paid_amount: paidAmount,
+            paidAmount: paidAmount,
+            remaining_amount: remainingAmount,
+            remainingAmount: remainingAmount,
+            start_date: subFormData.start_date,
+            end_date: subRes.end_date || endDatePreview || '',
+            payment_date: subFormData.start_date,
+          });
+        }
       }
 
       // Immediately re-fetch full client list and refreshed stats BEFORE closing modal
@@ -396,16 +440,19 @@ const Clients = () => {
       window.dispatchEvent(new Event('dashboard-refresh'));
       setIsFormModalOpen(false);
 
-      // Capture newly created client; detect if the subscription is already expired
-      const subAlreadyExpired = addInitialMembership && subFormData.start_date
-        ? new Date(subFormData.start_date) < new Date(new Date().toISOString().split('T')[0])
-        : false;
-      setNewlyCreatedClient({
+      const createdClientData = {
         id: clientId,
         name: clientFormData.name,
         phone: clientFormData.phone,
         client_code: clientCode,
-        sub_status: subAlreadyExpired ? 'expired' : 'active',
+        end_date: addInitialMembership ? endDatePreview : null,
+        created_at: new Date().toISOString(),
+      };
+      const effectiveStatus = getClientEffectiveStatus(createdClientData);
+      setNewlyCreatedClient({
+        ...createdClientData,
+        status: effectiveStatus,
+        sub_status: effectiveStatus.toLowerCase(),
       });
     } finally {
       setSubmitting(false);
@@ -435,12 +482,12 @@ const Clients = () => {
       {/* Post-create WhatsApp welcome banner */}
       {newlyCreatedClient && (
         <div className={`flex items-center justify-between p-4 border rounded-xl text-sm ${
-          newlyCreatedClient.sub_status === 'expired'
+          newlyCreatedClient.status === 'EXPIRED'
             ? 'bg-rose-500/10 border-rose-500/30'
             : 'bg-emerald-500/10 border-emerald-500/30'
         }`}>
           <div className={`flex items-center gap-2 ${
-            newlyCreatedClient.sub_status === 'expired' ? 'text-rose-400' : 'text-emerald-400'
+            newlyCreatedClient.status === 'EXPIRED' ? 'text-rose-400' : 'text-emerald-400'
           }`}>
             <MessageCircle className="w-4 h-4 flex-shrink-0" />
             <span>
@@ -452,16 +499,16 @@ const Clients = () => {
               <button
                 onClick={() => openClientWhatsApp({
                   client: newlyCreatedClient,
-                  contextOverride: newlyCreatedClient.sub_status === 'expired' ? 'EXPIRED' : 'WELCOME',
+                  contextOverride: newlyCreatedClient.status === 'EXPIRED' ? 'EXPIRED' : 'WELCOME',
                 })}
                 className={`flex items-center gap-1.5 px-3 py-1.5 text-white text-xs font-bold rounded-lg transition-colors ${
-                  newlyCreatedClient.sub_status === 'expired'
+                  newlyCreatedClient.status === 'EXPIRED'
                     ? 'bg-rose-500 hover:bg-rose-600'
                     : 'bg-[#25D366] hover:bg-[#1da854]'
                 }`}
               >
                 <MessageCircle className="w-3.5 h-3.5" />
-                {newlyCreatedClient.sub_status === 'expired'
+                {newlyCreatedClient.status === 'EXPIRED'
                   ? 'Send Expired Notice via WhatsApp'
                   : 'Send Welcome Message via WhatsApp'}
               </button>
@@ -490,10 +537,10 @@ const Clients = () => {
       </div>
 
       {/* KPI Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         <div 
-          onClick={() => setStatusFilter('all')}
-          className={`card p-5 bg-[#121721] border ${statusFilter === 'all' ? 'border-slate-400' : 'border-[#222B3D] hover:border-slate-600'} cursor-pointer transition-colors`}
+          onClick={() => setActiveTab('ALL')}
+          className={`card p-5 bg-[#121721] border ${activeTab === 'ALL' ? 'border-slate-400 bg-slate-800/20' : 'border-[#222B3D] hover:border-slate-600'} cursor-pointer transition-colors`}
         >
           <div className="flex justify-between items-start">
             <p className="text-xs font-bold uppercase tracking-widest text-slate-400">All Clients</p>
@@ -503,41 +550,54 @@ const Clients = () => {
         </div>
 
         <div 
-          onClick={() => setStatusFilter('active')}
-          className={`card p-5 bg-[#121721] border ${statusFilter === 'active' ? 'border-emerald-500 bg-emerald-500/10' : 'border-[#222B3D] hover:border-emerald-500/50'} cursor-pointer transition-colors`}
+          onClick={() => setActiveTab('ACTIVE')}
+          className={`card p-5 bg-[#121721] border ${activeTab === 'ACTIVE' ? 'border-emerald-500 bg-emerald-500/10' : 'border-[#222B3D] hover:border-emerald-500/50'} cursor-pointer transition-colors`}
         >
           <div className="flex justify-between items-start">
-            <p className={`text-xs font-bold uppercase tracking-widest ${statusFilter === 'active' ? 'text-emerald-400' : 'text-slate-400'}`}>Active</p>
-            <Activity className={`w-4 h-4 ${statusFilter === 'active' ? 'text-emerald-400' : 'text-slate-500'}`} />
+            <p className={`text-xs font-bold uppercase tracking-widest ${activeTab === 'ACTIVE' ? 'text-emerald-400' : 'text-slate-400'}`}>Active</p>
+            <Activity className={`w-4 h-4 ${activeTab === 'ACTIVE' ? 'text-emerald-400' : 'text-slate-500'}`} />
           </div>
-          <h3 className={`text-3xl font-black font-display mt-2 ${statusFilter === 'active' ? 'text-emerald-400' : 'text-[#CCFF00]'}`}>
+          <h3 className={`text-3xl font-black font-display mt-2 ${activeTab === 'ACTIVE' ? 'text-emerald-400' : 'text-[#CCFF00]'}`}>
             {activeCount}
           </h3>
         </div>
 
         <div 
-          onClick={() => setStatusFilter('expired')}
-          className={`card p-5 bg-[#121721] border ${statusFilter === 'expired' ? 'border-red-500 bg-red-500/10' : 'border-[#222B3D] hover:border-red-500/50'} cursor-pointer transition-colors`}
+          onClick={() => setActiveTab('FROZEN')}
+          className={`card p-5 bg-[#121721] border ${activeTab === 'FROZEN' ? 'border-sky-500 bg-sky-500/10' : 'border-[#222B3D] hover:border-sky-500/50'} cursor-pointer transition-colors`}
         >
           <div className="flex justify-between items-start">
-            <p className={`text-xs font-bold uppercase tracking-widest ${statusFilter === 'expired' ? 'text-red-400' : 'text-slate-400'}`}>Expired</p>
-            <AlertCircle className={`w-4 h-4 ${statusFilter === 'expired' ? 'text-red-400' : 'text-slate-500'}`} />
+            <p className={`text-xs font-bold uppercase tracking-widest ${activeTab === 'FROZEN' ? 'text-sky-400' : 'text-slate-400'}`}>Frozen</p>
+            <Snowflake className={`w-4 h-4 ${activeTab === 'FROZEN' ? 'text-sky-400' : 'text-slate-500'}`} />
           </div>
-          <h3 className={`text-3xl font-black font-display mt-2 ${statusFilter === 'expired' ? 'text-red-400' : 'text-[#EF4444]'}`}>
+          <h3 className="text-3xl font-black font-display mt-2 text-sky-400">
+            {frozenCount}
+          </h3>
+        </div>
+
+        <div 
+          onClick={() => setActiveTab('EXPIRED')}
+          className={`card p-5 bg-[#121721] border ${activeTab === 'EXPIRED' ? 'border-red-500 bg-red-500/10' : 'border-[#222B3D] hover:border-red-500/50'} cursor-pointer transition-colors`}
+        >
+          <div className="flex justify-between items-start">
+            <p className={`text-xs font-bold uppercase tracking-widest ${activeTab === 'EXPIRED' ? 'text-red-400' : 'text-slate-400'}`}>Expired</p>
+            <AlertCircle className={`w-4 h-4 ${activeTab === 'EXPIRED' ? 'text-red-400' : 'text-slate-500'}`} />
+          </div>
+          <h3 className={`text-3xl font-black font-display mt-2 ${activeTab === 'EXPIRED' ? 'text-red-400' : 'text-[#EF4444]'}`}>
             {expiredCount}
           </h3>
         </div>
 
         <div 
-          onClick={() => setStatusFilter('frozen')}
-          className={`card p-5 bg-[#121721] border ${statusFilter === 'frozen' ? 'border-sky-500' : 'border-[#222B3D] hover:border-sky-500/50'} cursor-pointer transition-colors`}
+          onClick={() => setActiveTab('DEBT')}
+          className={`card p-5 bg-[#121721] border ${activeTab === 'DEBT' ? 'border-amber-500 bg-amber-500/10' : 'border-[#222B3D] hover:border-amber-500/50'} cursor-pointer transition-colors`}
         >
           <div className="flex justify-between items-start">
-            <p className={`text-xs font-bold uppercase tracking-widest ${statusFilter === 'frozen' ? 'text-sky-400' : 'text-slate-400'}`}>Frozen</p>
-            <Snowflake className={`w-4 h-4 ${statusFilter === 'frozen' ? 'text-sky-400' : 'text-slate-500'}`} />
+            <p className={`text-xs font-bold uppercase tracking-widest ${activeTab === 'DEBT' ? 'text-amber-400' : 'text-slate-400'}`}>With Debt</p>
+            <span className="text-base">💰</span>
           </div>
-          <h3 className="text-3xl font-black font-display mt-2 text-sky-400">
-            {frozenCount}
+          <h3 className={`text-3xl font-black font-display mt-2 ${activeTab === 'DEBT' ? 'text-amber-400' : 'text-amber-300'}`}>
+            {debtCount}
           </h3>
         </div>
       </div>
@@ -559,7 +619,7 @@ const Clients = () => {
             />
           </div>
           <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
-            Showing {filteredClients.length} · Filter: {statusFilter}
+            Showing {displayedClients.length} · Filter: {statusFilter}
           </p>
         </div>
 
@@ -570,15 +630,18 @@ const Clients = () => {
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-[#0B0E14] text-slate-400 text-[10px] font-bold uppercase tracking-widest">
-                  <th className="px-6 py-4 border-b border-[#222B3D]">ID</th>
+                  <th className="px-6 py-4 border-b border-[#222B3D]">Code</th>
                   <th className="px-6 py-4 border-b border-[#222B3D]">Client Name</th>
                   <th className="px-6 py-4 border-b border-[#222B3D]">Phone</th>
                   <th className="px-6 py-4 border-b border-[#222B3D]">Status</th>
+                  {activeTab === 'DEBT' && (
+                    <th className="px-6 py-4 border-b border-[#222B3D]">Remaining Balance</th>
+                  )}
                   <th className="px-6 py-4 border-b border-[#222B3D] text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#222B3D]">
-                {filteredClients.map((client) => (
+                {displayedClients.map((client) => (
                   <tr
                     key={client.id}
                     className="hover:bg-[#181E2A] transition-colors cursor-pointer group"
@@ -591,12 +654,49 @@ const Clients = () => {
                         <span className="font-bold text-white text-sm">
                           {client.name}
                         </span>
+                        {Number(client.remaining_debt) > 0 && activeTab !== 'DEBT' && (
+                          <span 
+                            title={`Remaining Balance: ${Number(client.remaining_debt).toLocaleString()} EGP`}
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30 ml-2"
+                          >
+                            <span>💰</span>
+                            <span>{Number(client.remaining_debt).toLocaleString()} EGP</span>
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-6 py-4 text-slate-400 text-xs font-mono">{client.phone}</td>
-                    <td className="px-6 py-4">{getStatusBadge(client.sub_status)}</td>
+                    <td className="px-6 py-4">{getStatusBadge(getClientEffectiveStatus(client))}</td>
+                    {activeTab === 'DEBT' && (
+                      <td className="px-6 py-4">
+                        {Number(client.remaining_debt) > 0 ? (
+                          <div className="flex flex-col items-start">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold bg-amber-500/15 text-amber-400 border border-amber-500/30">
+                              <span>💰</span>
+                              <span>{Number(client.remaining_debt).toLocaleString()} EGP</span>
+                            </span>
+                            <span className="text-[10px] text-slate-500 mt-0.5">Unpaid Balance</span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-slate-500">Fully Paid</span>
+                        )}
+                      </td>
+                    )}
                     <td className="px-6 py-4 text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
+                        {activeTab === 'DEBT' && Number(client.remaining_debt) > 0 && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setClientToSettle(client);
+                            }}
+                            className="flex items-center gap-1 px-2.5 py-1 text-xs font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg transition-colors cursor-pointer mr-1"
+                            title="Settle Outstanding Dues"
+                          >
+                            <span>💰</span> Settle
+                          </button>
+                        )}
+
                         <WhatsAppContextualButtons client={client} size="md" />
 
                         <button
@@ -618,11 +718,13 @@ const Clients = () => {
                     </td>
                   </tr>
                 ))}
-                {filteredClients.length === 0 && (
+                {displayedClients.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-6 py-16 text-center text-slate-500">
+                    <td colSpan={activeTab === 'DEBT' ? 6 : 5} className="px-6 py-16 text-center text-slate-500">
                       <User className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                      <p className="font-bold uppercase tracking-widest text-sm">No athletes found.</p>
+                      <p className="font-bold uppercase tracking-widest text-sm">
+                        {activeTab === 'DEBT' ? 'No members with outstanding debt.' : 'No athletes found.'}
+                      </p>
                     </td>
                   </tr>
                 )}
@@ -633,7 +735,7 @@ const Clients = () => {
         
         {/* Footer row */}
         <div className="p-4 border-t border-[#222B3D] bg-[#0B0E14] text-xs font-bold uppercase tracking-widest text-slate-500">
-          {filteredClients.length} result{filteredClients.length !== 1 ? 's' : ''} shown — {totalCount} total registered
+          {displayedClients.length} result{displayedClients.length !== 1 ? 's' : ''} shown — {totalCount} total registered
         </div>
       </div>
 
@@ -840,6 +942,35 @@ const Clients = () => {
                             className="w-full px-4 py-2.5 bg-[#121721] border border-[#222B3D] rounded-xl text-white text-sm outline-none focus:border-[#8B5CF6] transition-colors font-mono"
                           />
                         </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-slate-400 text-[10px] font-bold uppercase tracking-widest">Paid (EGP)</label>
+                          <input
+                            type="number"
+                            value={subFormData.paid_amount}
+                            onChange={e => setSubFormData(p => ({ ...p, paid_amount: e.target.value }))}
+                            placeholder="0"
+                            className="w-full px-4 py-2.5 bg-[#121721] border border-[#222B3D] rounded-xl text-white text-sm outline-none focus:border-[#8B5CF6] transition-colors font-mono"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Visual Pricing Summary Box */}
+                      <div className="p-3 bg-[#121721] border border-[#222B3D] rounded-xl space-y-1.5 text-xs">
+                        <div className="flex justify-between text-slate-400">
+                          <span>Package Price:</span>
+                          <span className="font-mono text-white font-bold">{Number(subFormData.price || 0)} EGP</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400">
+                          <span>Paid Amount:</span>
+                          <span className="font-mono text-emerald-400 font-bold">{Number(subFormData.paid_amount !== '' && subFormData.paid_amount !== undefined ? subFormData.paid_amount : subFormData.price || 0)} EGP</span>
+                        </div>
+                        <div className="flex justify-between text-slate-400 border-t border-[#222B3D] pt-1.5">
+                          <span>Remaining Debt:</span>
+                          <span className={`font-mono ${Math.max(0, Number(subFormData.price || 0) - Number(subFormData.paid_amount !== '' && subFormData.paid_amount !== undefined ? subFormData.paid_amount : subFormData.price || 0)) > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}`}>
+                            {Math.max(0, Number(subFormData.price || 0) - Number(subFormData.paid_amount !== '' && subFormData.paid_amount !== undefined ? subFormData.paid_amount : subFormData.price || 0))} EGP
+                          </span>
+                        </div>
                       </div>
 
                       {endDatePreview && (
@@ -886,6 +1017,16 @@ const Clients = () => {
           </div>
         </div>
       )}
+
+      {/* ═══════════════════ QUICK SETTLE DEBT MODAL ═══════════════════ */}
+      {clientToSettle && (
+        <SettleDebtModal
+          client={clientToSettle}
+          onClose={() => setClientToSettle(null)}
+          onSettled={handleDebtSettled}
+        />
+      )}
+
     </div>
   );
 };

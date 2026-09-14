@@ -91,12 +91,19 @@ ipcMain.handle('print:receipt', async (event, data) => {
     client_code = client_code || 'AG-0000';
     package_name = package_name || 'Membership Subscription';
     payment_date = payment_date || new Date().toISOString().split('T')[0];
+
     start_date = start_date || payment_date;
     end_date = end_date || '—';
 
-    const totalAmount = parseFloat(amount) || parseFloat(paid_amount) || 0;
-    const paid = parseFloat(paid_amount) || totalAmount;
-    const residual = Math.max(0, totalAmount - paid).toFixed(2);
+    const safePrice = Number(parseFloat(data?.planPrice ?? data?.price ?? amount ?? paid_amount ?? 0).toFixed(2));
+    const safePaid = Number(parseFloat(data?.paidAmount ?? data?.paid_amount ?? paid_amount ?? safePrice).toFixed(2));
+    const safeRemaining = (data?.remainingAmount !== undefined && data?.remainingAmount !== null && data?.remainingAmount !== '')
+      ? Number(parseFloat(data.remainingAmount).toFixed(2))
+      : (data?.remaining_amount !== undefined && data?.remaining_amount !== null && data?.remaining_amount !== '')
+        ? Number(parseFloat(data.remaining_amount).toFixed(2))
+        : Math.max(0, Number((safePrice - safePaid).toFixed(2)));
+
+    const isFullyPaid = safeRemaining <= 0;
 
     // Read logo image and convert to Base64 data URI
     const logoPath = path.join(__dirname, '../../bill/logo.png');
@@ -120,10 +127,13 @@ ipcMain.handle('print:receipt', async (event, data) => {
       '{{CLIENT_AREA}}':    client_area,
       '{{CLIENT_CODE}}':    client_code,
       '{{PACKAGE_NAME}}':   package_name,
+      '{{PLAN_PRICE}}':     `${safePrice.toFixed(2)}`,
+      '{{PACKAGE_PRICE}}':  `${safePrice.toFixed(2)}`,
       '{{START_DATE}}':     formatDateDDMMYYYY(start_date) || start_date,
       '{{END_DATE}}':       end_date === '—' ? '—' : (formatDateDDMMYYYY(end_date) || end_date),
-      '{{AMOUNT_PAID}}':    `${paid.toFixed(2)}`,
-      '{{AMOUNT_RESIDUAL}}': residual,
+      '{{AMOUNT_PAID}}':    `${safePaid.toFixed(2)}`,
+      '{{RESIDUAL_LABEL}}': isFullyPaid ? 'Status' : 'Amount residual',
+      '{{AMOUNT_RESIDUAL}}': isFullyPaid ? 'Fully Paid' : `${safeRemaining.toFixed(2)} EGP`,
       '{{PAYMENT_DATE}}':   formatDateDDMMYYYY(payment_date) || payment_date,
       '{{TRANSACTION_ID}}': String(payment_id),
     };

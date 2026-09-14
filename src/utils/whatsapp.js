@@ -9,7 +9,13 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { isBirthdayToday, isTodayDate } from './dateFormat';
+import {
+  isBirthdayToday,
+  isTodayDate,
+  getClientEffectiveStatus,
+  calculateDaysRemaining,
+  isClientBirthdayToday,
+} from './dateFormat';
 export { isBirthdayToday, isTodayDate }; // re-export for any legacy callers
 
 // ─── 1. PHONE FORMATTING ─────────────────────────────────────────────────────
@@ -105,11 +111,15 @@ export function compileTemplate(template, client = {}) {
 
   const name    = String(client.full_name   ?? client.name        ?? '');
   const pkg     = String(client.package_name ?? client.packageName ?? client.plan ?? '');
-  const days    = client.days_left !== undefined
-    ? String(client.days_left)
-    : client.daysLeft !== undefined
-      ? String(client.daysLeft)
-      : '';
+  const endDate = client.end_date || client.subscription_end || client.latest_end_date || client.activeSubscription?.end_date;
+  const daysCalc = calculateDaysRemaining(endDate);
+  const days    = daysCalc !== null
+    ? String(daysCalc)
+    : (client.days_left !== undefined && client.days_left !== null
+      ? String(client.days_left)
+      : client.daysLeft !== undefined && client.daysLeft !== null
+        ? String(client.daysLeft)
+        : '');
 
   return template
     .replace(/\{name\}/g,    name)
@@ -163,22 +173,19 @@ export function resolveClientMessage(client = {}, templates = {}, contextOverrid
   }
 
   // 3. Auto-detection only if explicitly requested via 'AUTO'
-  const dob = client.date_of_birth || client.dob || null;
-  if (isBirthdayToday(dob)) {
+  if (isClientBirthdayToday(client)) {
     return compileTemplate(templates.wa_template_birthday || '', client);
   }
 
-  const daysLeft    = client.days_left ?? client.daysLeft;
-  const statusUpper = String(client.status || '').toUpperCase();
+  const status = getClientEffectiveStatus(client);
+  const endDate = client.end_date || client.subscription_end || client.latest_end_date || client.activeSubscription?.end_date;
+  const daysRemaining = calculateDaysRemaining(endDate);
 
-  if (statusUpper === 'EXPIRED' || (daysLeft !== undefined && daysLeft !== null && Number(daysLeft) <= 0)) {
+  if (status === 'EXPIRED') {
     return compileTemplate(templates.wa_template_expired || '', client);
   }
 
-  if (
-    statusUpper === 'EXPIRING' ||
-    (daysLeft !== undefined && daysLeft !== null && Number(daysLeft) > 0 && Number(daysLeft) <= 3)
-  ) {
+  if (status === 'ACTIVE' && daysRemaining !== null && daysRemaining > 0 && daysRemaining <= 3) {
     return compileTemplate(templates.wa_template_expiring || '', client);
   }
 

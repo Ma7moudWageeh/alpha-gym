@@ -9,7 +9,12 @@
 import React from "react";
 import { MessageCircle } from "lucide-react";
 import { openClientWhatsApp } from "../../utils/whatsapp";
-import { isBirthdayToday, isTodayDate } from "../../utils/dateFormat";
+import {
+  getClientEffectiveStatus,
+  calculateDaysRemaining,
+  isNewClientToday,
+  isClientBirthdayToday,
+} from "../../utils/dateFormat";
 
 const ICON_SIZE = { sm: "w-3.5 h-3.5", md: "w-4 h-4" };
 const PAD       = { sm: "p-1",         md: "p-1.5"    };
@@ -68,26 +73,14 @@ export function WhatsAppSingleButton({
 export function WhatsAppContextualButtons({ client, size = "md", stopPropagation = true }) {
   if (!client) return null;
 
-  const isBirthday = isBirthdayToday(client.date_of_birth);
-  const daysLeft   = (client.days_left !== undefined && client.days_left !== null)
-    ? Number(client.days_left) : null;
-  const subStatus  = String(client.sub_status ?? client.status ?? "").toLowerCase();
-  const compStatus = String(client.computed_status ?? "").toUpperCase();
+  const status = getClientEffectiveStatus(client);
+  const endDate = client.end_date || client.subscription_end || client.latest_end_date || client.activeSubscription?.end_date;
+  const daysRemaining = calculateDaysRemaining(endDate);
 
-  const isExpiring = daysLeft === 1 || (
-    client.latest_end_date &&
-    Math.ceil((new Date(client.latest_end_date) - new Date()) / 86400000) === 1
-  );
-
-  let isExpired = false;
-  if (daysLeft !== null && !Number.isNaN(daysLeft)) {
-    isExpired = daysLeft <= 0 && daysLeft >= -30;
-  } else {
-    isExpired = subStatus === "expired" || compStatus === "EXPIRED";
-  }
-
-  // A member cannot be a "New Welcome" member if their subscription is already expired
-  const isNew = isTodayDate(client.created_at ?? client.registered_at) && !isExpired;
+  const isBirthday = isClientBirthdayToday(client);
+  const isExpired = status === 'EXPIRED';
+  const isExpiring = status === 'ACTIVE' && daysRemaining === 1;
+  const isNew = isNewClientToday(client);
 
   const handleClick = (ctx) => (e) => {
     if (stopPropagation) e.stopPropagation();

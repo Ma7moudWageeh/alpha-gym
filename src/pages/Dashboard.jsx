@@ -3,7 +3,7 @@ import { AuthContext } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Users, Clock, MessageSquare, RefreshCw, X, CreditCard, ChevronRight, Printer, Snowflake } from 'lucide-react';
 import CheckInModal from '../components/CheckInModal';
-import { formatDateDDMMYYYY } from '../utils/dateFormat';
+import { formatDateDDMMYYYY, getClientEffectiveStatus, calculateDaysRemaining, getTodayStr, addDays } from '../utils/dateFormat';
 import DateInput from '../components/DateInput';
 
 import { WhatsAppSingleButton } from '../components/common/WhatsAppButton';
@@ -28,6 +28,7 @@ const Dashboard = () => {
   const [checkInOpen, setCheckInOpen] = useState(false);
 
   const [renewClient, setRenewClient] = useState(null);
+  const [stackAfterCurrent, setStackAfterCurrent] = useState(true);
   const [subFormData, setSubFormData] = useState({
     package_id: '',
     start_date: new Date().toISOString().split('T')[0],
@@ -43,7 +44,7 @@ const Dashboard = () => {
       window.electronAPI.reports.getDashboardMetrics(),
       window.electronAPI.alerts.getCounts(),
       window.electronAPI.alerts.getExpiringSoon(),
-      window.electronAPI.payments.getAll({ timeframe: 'month' }),
+      window.electronAPI.payments.getAll(),
       window.electronAPI.packages.getAll()
     ]);
 
@@ -78,6 +79,7 @@ const Dashboard = () => {
   const openRenewModal = (sub) => {
     setRenewClient(sub);
     setSubError('');
+    setStackAfterCurrent(true);
     const defaultPkg = packages[0];
     setSubFormData({
       package_id: defaultPkg ? defaultPkg.id.toString() : '',
@@ -102,6 +104,24 @@ const Dashboard = () => {
     }
   };
 
+  const todayStr = getTodayStr();
+  const currentEndDate = renewClient?.end_date || renewClient?.subscription_end || renewClient?.latest_end_date;
+  const hasActivePlan = Boolean(currentEndDate && currentEndDate >= todayStr);
+
+  const selectedPkg = packages.find(p => p.id.toString() === subFormData.package_id?.toString());
+  const planDuration = selectedPkg ? selectedPkg.duration_days : 30;
+
+  const computedStartDate = (() => {
+    if (hasActivePlan && stackAfterCurrent) {
+      return addDays(currentEndDate, 1);
+    }
+    return subFormData.start_date || todayStr;
+  })();
+
+  const computedEndDate = (() => {
+    return addDays(computedStartDate, planDuration - 1);
+  })();
+
   const handleSubSubmit = async (e, shouldPrint = false) => {
     if (e) e.preventDefault();
     setSubError('');
@@ -111,15 +131,23 @@ const Dashboard = () => {
       return;
     }
 
-    const selectedPkg = packages.find(p => p.id.toString() === subFormData.package_id.toString());
     const pkgTitle = selectedPkg ? selectedPkg.title : 'Subscription';
+
+    const cleanPrice = Number(parseFloat(subFormData.price || 0).toFixed(2));
+    const cleanPaid = Number(parseFloat(subFormData.paid_amount !== '' && subFormData.paid_amount !== undefined ? subFormData.paid_amount : cleanPrice).toFixed(2));
+    const planPrice = Math.max(0, cleanPrice);
+    const paidAmount = Math.max(0, cleanPaid);
+    const remainingAmount = Math.max(0, Number((planPrice - paidAmount).toFixed(2)));
+
+    const chosenStartDate = hasActivePlan && stackAfterCurrent ? computedStartDate : subFormData.start_date;
 
     const payload = {
       client_id: renewClient.client_id,
       package_id: parseInt(subFormData.package_id, 10),
-      start_date: subFormData.start_date,
-      price: parseFloat(subFormData.price),
-      paid_amount: parseFloat(subFormData.paid_amount || subFormData.price),
+      start_date: chosenStartDate,
+      stack_after_current: stackAfterCurrent,
+      price: planPrice,
+      paid_amount: paidAmount,
       note: subFormData.note
     };
 
@@ -138,8 +166,13 @@ const Dashboard = () => {
           client_name: clientInfo.client_name,
           client_code: clientInfo.client_code,
           package_name: pkgTitle,
-          amount: payload.price,
-          paid_amount: payload.paid_amount,
+          amount: paidAmount,
+          price: planPrice,
+          planPrice: planPrice,
+          paid_amount: paidAmount,
+          paidAmount: paidAmount,
+          remaining_amount: remainingAmount,
+          remainingAmount: remainingAmount,
           payment_date: payload.start_date,
           start_date: result.start_date || payload.start_date,
           end_date: result.end_date || '',
@@ -156,10 +189,12 @@ const Dashboard = () => {
     return `${days} DAYS`;
   };
 
-  const validExpiringClients = (expiringList || []).filter((client) => {
-    const daysLeft = client.days_remaining !== undefined ? Number(client.days_remaining) : Number(client.days_left);
-    // Must not be overdue, and must be within the 1-day threshold
-    return !Number.isNaN(daysLeft) && daysLeft >= 0 && daysLeft <= 1;
+  const validExpiringClients = (expiringList || []).filter((sub) => {
+    const endDate = sub.end_date || sub.subscription_end || sub.latest_end_date;
+    const daysRemaining = calculateDaysRemaining(endDate);
+    if (daysRemaining === null || daysRemaining < 0) return false;
+    const status = getClientEffectiveStatus(sub);
+    return status === 'ACTIVE' && daysRemaining <= 1;
   });
 
   return (
@@ -244,7 +279,8 @@ const Dashboard = () => {
                 </thead>
                 <tbody className="divide-y divide-[#222B3D] text-sm">
                   {validExpiringClients.map((sub) => {
-                    const daysLeft = sub.days_remaining !== undefined ? sub.days_remaining : sub.days_left;
+                    const endDate = sub.end_date || sub.subscription_end || sub.latest_end_date;
+                    const daysLeft = calculateDaysRemaining(endDate) ?? (sub.days_remaining !== undefined ? sub.days_remaining : sub.days_left);
                     return (
                       <tr
                         key={sub.id}
@@ -366,12 +402,44 @@ const Dashboard = () => {
                 </select>
               </div>
 
+              {hasActivePlan && (
+                <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/30 text-sky-300 text-xs leading-relaxed">
+                  ℹ️ <strong>Early Renewal:</strong> Current subscription active until <strong>{formatDateDDMMYYYY(currentEndDate)}</strong>. New plan will start on <strong>{formatDateDDMMYYYY(computedStartDate)}</strong> and expire on <strong>{formatDateDDMMYYYY(computedEndDate)}</strong> (Total days extended: +{planDuration}).
+                </div>
+              )}
+
+              {hasActivePlan && (
+                <div className="space-y-2 p-3 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-xs">
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                    <input
+                      type="radio"
+                      name="renew_stack"
+                      checked={stackAfterCurrent}
+                      onChange={() => setStackAfterCurrent(true)}
+                      className="text-[#CCFF00] focus:ring-[#CCFF00]"
+                    />
+                    <span className="font-semibold text-white">Stack after current plan <span className="text-[#CCFF00] text-[10px] font-bold">(Recommended)</span></span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-300">
+                    <input
+                      type="radio"
+                      name="renew_stack"
+                      checked={!stackAfterCurrent}
+                      onChange={() => setStackAfterCurrent(false)}
+                      className="text-[#CCFF00] focus:ring-[#CCFF00]"
+                    />
+                    <span>Start immediately from today</span>
+                  </label>
+                </div>
+              )}
+
               <div className="space-y-1.5">
                 <label className="text-slate-400 text-xs font-bold uppercase tracking-widest">Start Date</label>
-                  <DateInput
-                  value={subFormData.start_date}
+                <DateInput
+                  value={hasActivePlan && stackAfterCurrent ? computedStartDate : subFormData.start_date}
                   onChange={(iso) => setSubFormData(prev => ({ ...prev, start_date: iso }))}
-                  className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white font-medium outline-none focus:border-[#CCFF00] focus:ring-1 focus:ring-[#CCFF00] transition-all font-mono"
+                  disabled={hasActivePlan && stackAfterCurrent}
+                  className={`w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white font-medium outline-none focus:border-[#CCFF00] focus:ring-1 focus:ring-[#CCFF00] transition-all font-mono ${hasActivePlan && stackAfterCurrent ? 'opacity-80 cursor-not-allowed' : ''}`}
                 />
               </div>
 
@@ -393,6 +461,24 @@ const Dashboard = () => {
                     onChange={(e) => setSubFormData(prev => ({ ...prev, paid_amount: e.target.value }))}
                     className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white font-medium outline-none focus:border-[#CCFF00] focus:ring-1 focus:ring-[#CCFF00] transition-all"
                   />
+                </div>
+              </div>
+
+              {/* Visual Pricing Summary Box */}
+              <div className="p-3 bg-[#0B0E14] border border-[#222B3D] rounded-xl space-y-1.5 text-xs">
+                <div className="flex justify-between text-slate-400">
+                  <span>Package Price:</span>
+                  <span className="font-mono text-white font-bold">{Number(subFormData.price || 0)} EGP</span>
+                </div>
+                <div className="flex justify-between text-slate-400">
+                  <span>Paid Amount:</span>
+                  <span className="font-mono text-emerald-400 font-bold">{Number(subFormData.paid_amount !== '' && subFormData.paid_amount !== undefined ? subFormData.paid_amount : subFormData.price || 0)} EGP</span>
+                </div>
+                <div className="flex justify-between text-slate-400 border-t border-[#222B3D] pt-1.5">
+                  <span>Remaining Debt:</span>
+                  <span className={`font-mono ${Math.max(0, Number(subFormData.price || 0) - Number(subFormData.paid_amount !== '' && subFormData.paid_amount !== undefined ? subFormData.paid_amount : subFormData.price || 0)) > 0 ? 'text-amber-400 font-bold' : 'text-slate-500'}`}>
+                    {Math.max(0, Number(subFormData.price || 0) - Number(subFormData.paid_amount !== '' && subFormData.paid_amount !== undefined ? subFormData.paid_amount : subFormData.price || 0))} EGP
+                  </span>
                 </div>
               </div>
 

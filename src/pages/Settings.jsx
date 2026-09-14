@@ -2,6 +2,8 @@ import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { Plus, Edit2, Power, X, Database, Download, Upload, FileSpreadsheet, ShieldAlert, CheckCircle2, AlertTriangle, Users, Shield, Trash2, Eye, EyeOff, MessageSquare, Save } from 'lucide-react';
 import { formatDateDDMMYYYY } from '../utils/dateFormat';
+import WhatsNewModal from '../components/modals/WhatsNewModal';
+import packageJson from '../../package.json';
 
 const Settings = () => {
   const { user } = useContext(AuthContext);
@@ -10,6 +12,7 @@ const Settings = () => {
   const [activeTab, setActiveTab] = useState('packages'); // packages | backup | staff
   const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [showWhatsNewManual, setShowWhatsNewManual] = useState(false);
 
   // Package Modal states
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -892,6 +895,27 @@ const Settings = () => {
           </div>
         </div>
       )}
+
+      {/* System Information Section */}
+      <div className="card p-5 bg-brand-panel border-[#222B3D] flex items-center justify-between">
+        <div>
+          <h4 className="text-sm font-semibold text-slate-200">System Information</h4>
+          <p className="text-xs text-slate-400 mt-0.5">Alpha Gym Management Software &bull; v{packageJson.version}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowWhatsNewManual(true)}
+          className="text-xs text-slate-400 hover:text-slate-200 underline transition-colors"
+        >
+          View v{packageJson.version} Release Notes
+        </button>
+      </div>
+
+      <WhatsNewModal
+        isOpen={showWhatsNewManual}
+        onClose={() => setShowWhatsNewManual(false)}
+        currentVersion={packageJson.version}
+      />
 
       {/* Package Add/Edit Modal */}
       {isModalOpen && isOwner && (

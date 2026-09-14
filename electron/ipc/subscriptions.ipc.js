@@ -1,28 +1,54 @@
 const { ipcMain } = require('electron');
 const db = require('../db');
 
-function addDays(dateStr, days) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().split('T')[0];
+function getLocalDateStr(d = new Date()) {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
-ipcMain.handle('subscriptions:create', async (event, { client_id, package_id, start_date, price, paid_amount, note }) => {
+function addDays(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return dt.toISOString().split('T')[0];
+}
+
+ipcMain.handle('subscriptions:create', async (event, args = {}) => {
   try {
-    const pkg = db.prepare('SELECT * FROM packages WHERE id = ?').get(package_id);
+    const {
+      client_id,
+      package_id,
+      plan_id,
+      start_date,
+      price,
+      planPrice,
+      paid_amount,
+      paidAmount,
+      note,
+    } = args;
+
+    const chosenPkgId = package_id || plan_id;
+    const pkg = db.prepare('SELECT * FROM packages WHERE id = ?').get(chosenPkgId)
+      || db.prepare('SELECT * FROM plans WHERE id = ?').get(chosenPkgId);
     if (!pkg) return { error: 'Package not found' };
 
-    const startDate = start_date || new Date().toISOString().split('T')[0];
-    const endDate = addDays(startDate, pkg.duration_days);
-    const subPrice = price !== undefined ? price : pkg.default_price;
+    const durationDays = pkg.duration_days || 30;
+    const rawPrice = price ?? planPrice ?? pkg.default_price ?? pkg.price ?? 0;
+    const cleanPrice = Number(parseFloat(rawPrice !== '' && rawPrice !== undefined ? rawPrice : 0).toFixed(2));
+    const subPrice = Math.max(0, cleanPrice);
 
-    const today = new Date().toISOString().split('T')[0];
+    const rawPaid = (paid_amount !== undefined && paid_amount !== '')
+      ? paid_amount
+      : ((paidAmount !== undefined && paidAmount !== '') ? paidAmount : subPrice);
+    const cleanPaid = Number(parseFloat(rawPaid).toFixed(2));
+    const amountPaid = Math.max(0, cleanPaid);
+    const remainingAmount = Math.max(0, Number((subPrice - amountPaid).toFixed(2)));
+    const today = getLocalDateStr();
+
+    const startDate = start_date || today;
+    const endDate = addDays(startDate, durationDays - 1);
     const initialStatus = endDate < today ? 'expired' : 'active';
-
-    const insertSub = db.prepare(`
-      INSERT INTO subscriptions (client_id, package_id, start_date, end_date, price, status)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `);
 
     const subInfo = db.transaction(() => {
       // Only expire old active subs that have already started (keep future stacked intact)
@@ -30,75 +56,153 @@ ipcMain.handle('subscriptions:create', async (event, { client_id, package_id, st
         db.prepare("UPDATE subscriptions SET status = 'expired' WHERE client_id = ? AND status = 'active'").run(client_id);
       }
 
-      const res = insertSub.run(client_id, package_id, startDate, endDate, subPrice, initialStatus);
+      const res = db.prepare(`
+        INSERT INTO subscriptions (client_id, package_id, plan_id, start_date, end_date, duration_days, price, paid_amount, remaining_amount, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(client_id, chosenPkgId, chosenPkgId, startDate, endDate, durationDays, subPrice, amountPaid, remainingAmount, initialStatus);
+
       const subId = res.lastInsertRowid;
 
-      const amountPaid = paid_amount !== undefined ? paid_amount : subPrice;
+      db.prepare(`
+        UPDATE clients 
+        SET start_date = ?, end_date = ?, status = 'active',
+            remaining_debt = (
+              SELECT COALESCE(SUM(remaining_amount), 0) 
+              FROM subscriptions 
+              WHERE client_id = ?
+            )
+        WHERE id = ?
+      `).run(startDate, endDate, client_id, client_id);
+
       db.prepare(`
         INSERT INTO payments (client_id, subscription_id, amount, type, note)
         VALUES (?, ?, ?, 'subscription', ?)
       `).run(client_id, subId, amountPaid, note || `Subscription: ${pkg.title}`);
+
+      try {
+        db.prepare(`
+          INSERT INTO transactions (client_id, type, amount, category, date, notes)
+          VALUES (?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
+        `).run(client_id, amountPaid, note || `Subscription: ${pkg.title}`);
+      } catch (e) {}
 
       return subId;
     })();
 
     db.syncAllSubscriptionStatuses(db);
 
-    return { success: true, subscription_id: subInfo, start_date: startDate, end_date: endDate, status: initialStatus };
+    return {
+      success: true,
+      subscription_id: subInfo,
+      start_date: startDate,
+      end_date: endDate,
+      duration_days: durationDays,
+      price: subPrice,
+      paid_amount: amountPaid,
+      remaining_amount: remainingAmount,
+      status: initialStatus
+    };
   } catch (err) {
     return { error: err.message };
   }
 });
 
-ipcMain.handle('subscriptions:renew', async (event, { client_id, package_id, start_date, price, paid_amount, note }) => {
+ipcMain.handle('subscriptions:renew', async (event, { client_id, package_id, start_date, price, paid_amount, note, stack_after_current, stackAfterCurrent }) => {
   try {
     db.syncAllSubscriptionStatuses(db);
 
     const pkg = db.prepare('SELECT * FROM packages WHERE id = ?').get(package_id);
     if (!pkg) return { error: 'Package not found' };
 
-    const currentSub = db.prepare(
-      "SELECT * FROM subscriptions WHERE client_id = ? AND status = 'active' ORDER BY end_date DESC LIMIT 1"
-    ).get(client_id);
+    const durationDays = pkg.duration_days || 30;
+    const cleanPrice = Number(parseFloat(price !== undefined && price !== '' ? price : (pkg.default_price || 0)).toFixed(2));
+    const subPrice = Math.max(0, cleanPrice);
+    const cleanPaid = Number(parseFloat(paid_amount !== undefined && paid_amount !== '' ? paid_amount : subPrice).toFixed(2));
+    const amountPaid = Math.max(0, cleanPaid);
+    const remainingAmount = Math.max(0, Number((subPrice - amountPaid).toFixed(2)));
+    const today = getLocalDateStr();
 
-    let startDate = start_date;
-    if (!startDate) {
-      const today = new Date().toISOString().split('T')[0];
-      if (currentSub && currentSub.end_date > today) {
-        startDate = currentSub.end_date;
-      } else {
-        startDate = today;
-      }
+    // Query client's latest non-deferred subscription
+    const latestSub = db.prepare(`
+      SELECT id, start_date, end_date, status 
+      FROM subscriptions 
+      WHERE client_id = ? AND end_date IS NOT NULL
+      ORDER BY end_date DESC 
+      LIMIT 1
+    `).get(client_id);
+
+    const hasActivePlan = Boolean(latestSub && latestSub.end_date && latestSub.end_date >= today);
+    const shouldStack = (stack_after_current !== undefined ? Boolean(stack_after_current) : (stackAfterCurrent !== undefined ? Boolean(stackAfterCurrent) : true));
+
+    let startDateStr;
+    let endDateStr;
+
+    if (hasActivePlan && shouldStack && !start_date) {
+      // Consecutive Stacking: new_start = current_end + 1 day
+      startDateStr = addDays(latestSub.end_date, 1);
+      endDateStr = addDays(startDateStr, durationDays - 1);
+    } else {
+      const baseDateStr = start_date || today;
+      startDateStr = baseDateStr;
+      endDateStr = addDays(baseDateStr, durationDays - 1);
     }
 
-    const endDate = addDays(startDate, pkg.duration_days);
-    const subPrice = price !== undefined ? price : pkg.default_price;
-
     const subInfo = db.transaction(() => {
-      const today = new Date().toISOString().split('T')[0];
-      if (startDate <= today) {
+      // Only expire older active subs if new sub starts today or earlier
+      if (startDateStr <= today) {
         db.prepare("UPDATE subscriptions SET status = 'expired' WHERE client_id = ? AND status = 'active'").run(client_id);
       }
 
       const res = db.prepare(`
-        INSERT INTO subscriptions (client_id, package_id, start_date, end_date, price, status)
-        VALUES (?, ?, ?, ?, ?, 'active')
-      `).run(client_id, package_id, startDate, endDate, subPrice);
+        INSERT INTO subscriptions (client_id, package_id, start_date, end_date, duration_days, price, paid_amount, remaining_amount, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active')
+      `).run(client_id, package_id, startDateStr, endDateStr, durationDays, subPrice, amountPaid, remainingAmount);
 
       const subId = res.lastInsertRowid;
 
-      const amountPaid = paid_amount !== undefined ? paid_amount : subPrice;
+      // Update client record with the latest pushed-out end_date and active status
+      db.prepare(`
+        UPDATE clients 
+        SET end_date = CASE 
+                         WHEN end_date IS NULL OR end_date < ? THEN ? 
+                         ELSE end_date 
+                       END,
+            status = 'active',
+            remaining_debt = (
+              SELECT COALESCE(SUM(remaining_amount), 0) 
+              FROM subscriptions 
+              WHERE client_id = ?
+            )
+        WHERE id = ?
+      `).run(endDateStr, endDateStr, client_id, client_id);
+
       db.prepare(`
         INSERT INTO payments (client_id, subscription_id, amount, type, note)
         VALUES (?, ?, ?, 'renewal', ?)
       `).run(client_id, subId, amountPaid, note || `Renewal: ${pkg.title}`);
+
+      try {
+        db.prepare(`
+          INSERT INTO transactions (client_id, type, amount, category, date, notes)
+          VALUES (?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
+        `).run(client_id, amountPaid, note || `Renewal: ${pkg.title}`);
+      } catch (e) {}
 
       return subId;
     })();
 
     db.syncAllSubscriptionStatuses(db);
 
-    return { success: true, subscription_id: subInfo, start_date: startDate, end_date: endDate };
+    return {
+      success: true,
+      subscription_id: subInfo,
+      start_date: startDateStr,
+      end_date: endDateStr,
+      duration_days: durationDays,
+      price: subPrice,
+      paid_amount: amountPaid,
+      remaining_amount: remainingAmount
+    };
   } catch (err) {
     return { error: err.message };
   }
@@ -202,6 +306,7 @@ ipcMain.handle('subscriptions:checkIn', async (event, { query }) => {
       return { success: true, status: 'NOT_FOUND' };
     }
 
+
     // Prefer frozen, then any non-expired active/future sub
     const frozenSub = db.prepare(`
       SELECT s.*, p.title as package_title
@@ -248,6 +353,14 @@ ipcMain.handle('subscriptions:checkIn', async (event, { query }) => {
       };
     }
 
+    // Log regular checkin
+    try {
+      db.prepare(`
+        INSERT INTO checkins (client_id, checkin_time, notes) 
+        VALUES (?, datetime('now', 'localtime'), ?)
+      `).run(client.id, 'Regular checkin');
+    } catch (e) {}
+
     return {
       success: true,
       client,
@@ -258,6 +371,21 @@ ipcMain.handle('subscriptions:checkIn', async (event, { query }) => {
     return { error: err.message };
   }
 });
+
+ipcMain.handle('checkin:create', async (event, { clientId, notes }) => {
+  try {
+    db.prepare(`
+      INSERT INTO checkins (client_id, checkin_time, notes) 
+      VALUES (?, datetime('now', 'localtime'), ?)
+    `).run(clientId, notes || 'Regular checkin');
+
+    db.syncAllSubscriptionStatuses(db);
+    return { success: true };
+  } catch (err) {
+    return { error: err.message };
+  }
+});
+
 
 ipcMain.handle('subscriptions:getHistory', async (event, { client_id }) => {
   db.syncAllSubscriptionStatuses(db);

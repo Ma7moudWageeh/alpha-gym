@@ -19,6 +19,9 @@ const CheckInModal = ({ isOpen, onClose }) => {
 
     if (res.success) {
       setResult(res);
+      if (res.activated) {
+        window.dispatchEvent(new Event('dashboard-refresh'));
+      }
     }
   };
 
@@ -67,6 +70,12 @@ const CheckInModal = ({ isOpen, onClose }) => {
                   <CheckCircle className="w-16 h-16 text-brand-success mx-auto" />
                   <h4 className="text-2xl font-black font-display uppercase tracking-wider text-white">{result.client.name}</h4>
                   <p className="text-brand-success font-semibold tracking-wider text-lg">ACCESS GRANTED • ACTIVE</p>
+                  {(result.activated || result.activationInfo) && (
+                    <div className="p-3 bg-purple-500/20 border border-purple-500/40 rounded-xl text-purple-200 text-sm font-bold flex items-center justify-center gap-2">
+                      <span>🎉</span>
+                      <span>Subscription activated starting today!</span>
+                    </div>
+                  )}
                   <div className="text-slate-300 text-sm bg-[#0B0E14]/50 p-3 rounded border border-[#222B3D]">
                     <p>Package: <strong className="text-white">{result.subscription.package_title}</strong></p>
                     <p>Expires: <strong className="text-white">{formatDateDDMMYYYY(result.subscription.end_date)}</strong></p>

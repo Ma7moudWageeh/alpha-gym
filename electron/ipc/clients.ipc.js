@@ -123,7 +123,7 @@ function computeClientStatus(clientId) {
       CAST(julianday(DATE(?)) - julianday(DATE(end_date)) AS INT) as days_since_expiry,
       CAST(julianday(DATE(end_date)) - julianday(DATE(?)) AS INT) as days_left
     FROM subscriptions
-    WHERE client_id = ?
+    WHERE client_id = ? AND end_date IS NOT NULL
     ORDER BY end_date DESC LIMIT 1
   `).get(today, today, clientId);
 
@@ -153,7 +153,14 @@ function computeClientStatus(clientId) {
 ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } = {}) => {
   db.syncAllSubscriptionStatuses(db);
   try {
-    let query = `SELECT c.* FROM clients c WHERE 1=1`;
+    let query = `
+      SELECT c.*, s.end_date as subscription_end 
+      FROM clients c 
+      LEFT JOIN subscriptions s ON s.id = (
+        SELECT id FROM subscriptions WHERE client_id = c.id ORDER BY created_at DESC, id DESC LIMIT 1
+      )
+      WHERE 1=1
+    `;
     const params = [];
 
     if (search) {
@@ -171,11 +178,13 @@ ipcMain.handle('clients:getAll', async (event, { search = '', status = 'all' } =
       const createdAt = c.registered_at || c.created_at || null;
       return {
         ...c,
+        remaining_debt: Number(c.remaining_debt || 0),
         created_at: createdAt,
         registered_at: createdAt,
         sub_status: statusInfo.sub_status,
         computed_status: statusInfo.computed_status,
         latest_end_date: statusInfo.latest_end_date,
+        end_date: statusInfo.latest_end_date || c.subscription_end,
         days_left: statusInfo.days_left,
         days_since_expiry: statusInfo.days_since_expiry,
         freeze_reason: statusInfo.freeze_reason,
@@ -311,7 +320,7 @@ ipcMain.handle('clients:getById', async (event, { id }) => {
       SELECT s.*, p.title as package_title,
        CASE
          WHEN s.status = 'frozen' THEN 'frozen'
-         WHEN DATE(s.end_date) < DATE('now', 'localtime') THEN 'expired'
+         WHEN s.end_date IS NOT NULL AND DATE(s.end_date) < DATE('now', 'localtime') THEN 'expired'
          ELSE s.status
        END as computed_status
       FROM subscriptions s
@@ -366,47 +375,183 @@ ipcMain.handle('clients:getPayments', async (event, { client_id }) => {
   }
 });
 
-ipcMain.handle('clients:create', async (event, clientData = {}) => {
+ipcMain.handle('clients:create', async (event, data = {}) => {
   try {
-    let clientCode = clientData.client_code;
-    if (!clientCode || typeof clientCode !== 'string' || clientCode.trim() === '') {
-      clientCode = generateNextClientCode(db);
-    } else {
-      clientCode = clientCode.trim();
-      if (db.prepare('SELECT 1 FROM clients WHERE client_code = ?').get(clientCode)) {
+    const insertTransaction = db.transaction(() => {
+      // 1. Resolve client code defensively
+      let clientCode = data.client_code;
+      if (!clientCode || typeof clientCode !== 'string' || clientCode.trim() === '') {
         clientCode = generateNextClientCode(db);
+      } else {
+        clientCode = clientCode.trim();
+        if (db.prepare('SELECT 1 FROM clients WHERE client_code = ?').get(clientCode)) {
+          clientCode = generateNextClientCode(db);
+        }
       }
-    }
 
-    const insert = db.prepare(`
-      INSERT INTO clients (
-        name, phone, date_of_birth, gender, national_id, emergency_contact,
-        notes, client_code, height_cm, weight_kg, has_conditions,
-        area, other_sports, injuries, medical_details
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
+      const planId = data.plan_id ?? data.planId ?? data.package_id ?? data.packageId;
 
-    const info = insert.run(
-      clientData.name || clientData.full_name,
-      clientData.phone,
-      clientData.birth_date || clientData.date_of_birth || null,
-      clientData.gender || null,
-      clientData.national_id || null,
-      clientData.emergency_contact || null,
-      clientData.notes || null,
-      clientCode,
-      clientData.height_cm || 0,
-      clientData.weight_kg || 0,
-      clientData.has_conditions ? 1 : 0,
-      clientData.area || null,
-      clientData.other_sports || null,
-      clientData.injuries || null,
-      clientData.medical_details || null
-    );
+      if (planId) {
+        // 1. Fetch chosen plan details
+        const plan = db.prepare('SELECT * FROM packages WHERE id = ?').get(planId)
+          || db.prepare('SELECT * FROM plans WHERE id = ?').get(planId);
+        if (!plan) throw new Error('Selected membership plan does not exist');
 
-    return { success: true, id: info.lastInsertRowid, client_code: clientCode };
+        // 2. Resolve financial numbers defensively
+        const planPrice = Number(data.price ?? data.planPrice ?? plan.price ?? plan.default_price ?? 0);
+        const paidAmount = Number(data.paid_amount ?? data.paidAmount ?? planPrice);
+        const remainingAmount = Math.max(0, Number((planPrice - paidAmount).toFixed(2)));
+
+        // 3. Compute Dates
+        const today = new Date();
+        const startDate = data.start_date || today.toISOString().split('T')[0];
+        const durationDays = plan.duration_days || 30;
+        let endDate;
+        if (data.end_date) {
+          endDate = data.end_date;
+        } else {
+          const endDateObj = new Date(startDate);
+          endDateObj.setDate(endDateObj.getDate() + (durationDays - 1));
+          endDate = endDateObj.toISOString().split('T')[0];
+        }
+
+        // Normalize status defensively to lowercase matching SQLite constraint
+        const rawStatus = data.status || 'active';
+        const safeStatus = ['active', 'frozen', 'expired'].includes(String(rawStatus).toLowerCase())
+          ? String(rawStatus).toLowerCase()
+          : 'active';
+
+        // 4. Insert client with remaining_debt initialized
+        const clientInsert = db.prepare(`
+          INSERT INTO clients (
+            name, phone, national_id, gender, date_of_birth, birth_date,
+            status, start_date, end_date, remaining_debt, created_at,
+            client_code, height_cm, weight_kg, has_conditions,
+            area, other_sports, injuries, medical_details, emergency_contact, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          data.name || data.full_name,
+          data.phone,
+          data.national_id || null,
+          data.gender || 'MALE',
+          data.birth_date || data.date_of_birth || null,
+          data.birth_date || data.date_of_birth || null,
+          safeStatus,
+          startDate,
+          endDate,
+          remainingAmount,
+          clientCode,
+          data.height_cm || 0,
+          data.weight_kg || 0,
+          data.has_conditions ? 1 : 0,
+          data.area || null,
+          data.other_sports || null,
+          data.injuries || null,
+          data.medical_details || null,
+          data.emergency_contact || null,
+          data.notes || null
+        );
+
+        const clientId = clientInsert.lastInsertRowid;
+
+        // 5. Insert subscription record with financial breakdown
+        const subInsert = db.prepare(`
+          INSERT INTO subscriptions (
+            client_id, package_id, plan_id, start_date, end_date, duration_days,
+            price, paid_amount, remaining_amount, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', datetime('now'))
+        `).run(
+          clientId,
+          plan.id,
+          plan.id,
+          startDate,
+          endDate,
+          durationDays,
+          planPrice,
+          paidAmount,
+          remainingAmount
+        );
+
+        const subscriptionId = subInsert.lastInsertRowid;
+
+        // 6. Record payment and cash collected into transactions
+        if (paidAmount > 0) {
+          db.prepare(`
+            INSERT INTO payments (client_id, subscription_id, amount, type, note)
+            VALUES (?, ?, ?, 'subscription', ?)
+          `).run(clientId, subscriptionId, paidAmount, `New Member Subscription - Paid: ${paidAmount} EGP, Due: ${remainingAmount} EGP`);
+
+          try {
+            db.prepare(`
+              INSERT INTO transactions (
+                client_id, type, amount, category, date, notes
+              ) VALUES (?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
+            `).run(clientId, paidAmount, `New Member Subscription - Paid: ${paidAmount} EGP, Due: ${remainingAmount} EGP`);
+          } catch (e) {}
+        }
+
+        // Return complete client entity
+        const newClient = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId);
+        return {
+          success: true,
+          id: clientId,
+          client_code: clientCode,
+          client: {
+            ...newClient,
+            planName: plan.title || plan.name,
+            planPrice,
+            paidAmount,
+            remainingAmount
+          }
+        };
+      } else {
+        const rawStatus = data.status || 'active';
+        const safeStatus = ['active', 'frozen', 'expired'].includes(String(rawStatus).toLowerCase())
+          ? String(rawStatus).toLowerCase()
+          : 'active';
+
+        const clientInsert = db.prepare(`
+          INSERT INTO clients (
+            name, phone, national_id, gender, date_of_birth, birth_date,
+            client_code, height_cm, weight_kg, has_conditions,
+            area, other_sports, injuries, medical_details, emergency_contact, notes,
+            remaining_debt, status, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+        `).run(
+          data.name || data.full_name,
+          data.phone,
+          data.national_id || null,
+          data.gender || null,
+          data.birth_date || data.date_of_birth || null,
+          data.birth_date || data.date_of_birth || null,
+          clientCode,
+          data.height_cm || 0,
+          data.weight_kg || 0,
+          data.has_conditions ? 1 : 0,
+          data.area || null,
+          data.other_sports || null,
+          data.injuries || null,
+          data.medical_details || null,
+          data.emergency_contact || null,
+          data.notes || null,
+          Number(data.remaining_debt ?? data.remainingAmount ?? data.remaining_amount ?? 0),
+          safeStatus
+        );
+
+        const clientId = clientInsert.lastInsertRowid;
+        const newClient = db.prepare('SELECT * FROM clients WHERE id = ?').get(clientId);
+        return {
+          success: true,
+          id: clientId,
+          client_code: clientCode,
+          client: newClient
+        };
+      }
+    });
+
+    return insertTransaction();
   } catch (err) {
-    return { error: err.message };
+    return { success: false, error: err.message };
   }
 });
 
@@ -575,6 +720,83 @@ ipcMain.handle('clients:getTodayBirthdays', async () => {
     return { success: true, birthdays };
   } catch (err) {
     return { success: false, error: err.message, birthdays: [] };
+  }
+});
+
+ipcMain.handle('clients:settleDebt', async (event, { clientId, amount, notes }) => {
+  try {
+    const cleanAmount = Number(parseFloat(amount || 0).toFixed(2));
+    if (!clientId || isNaN(cleanAmount) || cleanAmount <= 0) {
+      return { success: false, error: 'Settlement amount must be greater than zero' };
+    }
+
+    const clientRow = db.prepare('SELECT id, remaining_debt FROM clients WHERE id = ?').get(clientId);
+    if (!clientRow) {
+      return { success: false, error: 'Client not found' };
+    }
+
+    const currentDebt = Number(clientRow.remaining_debt || 0);
+    if (cleanAmount > currentDebt) {
+      return { success: false, error: 'Settlement amount cannot exceed remaining balance' };
+    }
+
+    const runSettlement = db.transaction((cId, numAmount, noteText) => {
+      // 1. Fetch unpaid subscriptions for this client chronologically
+      const unpaidSubs = db.prepare(`
+        SELECT id, remaining_amount, paid_amount 
+        FROM subscriptions 
+        WHERE client_id = ? AND remaining_amount > 0 
+        ORDER BY created_at ASC
+      `).all(cId);
+
+      let amountLeftToApply = numAmount;
+
+      for (const sub of unpaidSubs) {
+        if (amountLeftToApply <= 0) break;
+        const currentSubRemaining = Number(sub.remaining_amount || 0);
+        const deduction = Math.min(currentSubRemaining, amountLeftToApply);
+
+        // Strict Date Invariance: Only remaining_amount and paid_amount are updated
+        db.prepare(`
+          UPDATE subscriptions 
+          SET remaining_amount = MAX(0, remaining_amount - ?),
+              paid_amount = paid_amount + ?
+          WHERE id = ?
+        `).run(deduction, deduction, sub.id);
+
+        amountLeftToApply = Number((amountLeftToApply - deduction).toFixed(2));
+      }
+
+      // 2. Recalculate and update client cached remaining debt
+      db.prepare(`
+        UPDATE clients 
+        SET remaining_debt = (
+          SELECT COALESCE(SUM(remaining_amount), 0) 
+          FROM subscriptions 
+          WHERE client_id = ?
+        )
+        WHERE id = ?
+      `).run(cId, cId);
+
+      // 3. Record income entry in transactions ledger and payments
+      db.prepare(`
+        INSERT INTO transactions (client_id, type, amount, category, date, notes)
+        VALUES (?, 'INCOME', ?, 'DEBT_SETTLEMENT', date('now'), ?)
+      `).run(cId, numAmount, noteText || 'Subscription remaining balance settlement');
+
+      db.prepare(`
+        INSERT INTO payments (client_id, subscription_id, amount, type, note)
+        VALUES (?, NULL, ?, 'debt_settlement', ?)
+      `).run(cId, numAmount, noteText || 'Subscription remaining balance settlement');
+
+      return true;
+    });
+
+    runSettlement(clientId, cleanAmount, notes);
+    const updatedClient = db.prepare('SELECT remaining_debt FROM clients WHERE id = ?').get(clientId);
+    return { success: true, remaining_debt: Number(updatedClient?.remaining_debt || 0) };
+  } catch (err) {
+    return { success: false, error: err.message };
   }
 });
 

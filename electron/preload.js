@@ -48,7 +48,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     removePhoto: (args) => ipcRenderer.invoke('clients:removePhoto', args),
     deletePhoto: (clientId) => ipcRenderer.invoke('clients:deletePhoto', clientId),
     getTodayBirthdays: () => ipcRenderer.invoke('clients:getTodayBirthdays'),
+    settleDebt: (payload) => ipcRenderer.invoke('clients:settleDebt', payload),
   },
+  createClient: (args) => ipcRenderer.invoke('clients:create', args),
+  plans: {
+    getAll: (args) => ipcRenderer.invoke('packages:getAll', args),
+  },
+  getPlans: (args) => ipcRenderer.invoke('packages:getAll', args),
+  settleDebt: (payload) => ipcRenderer.invoke('clients:settleDebt', payload),
   subscriptions: {
     create: (args) => ipcRenderer.invoke('subscriptions:create', args),
     renew: (args) => ipcRenderer.invoke('subscriptions:renew', args),
@@ -56,6 +63,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     unfreeze: (args) => ipcRenderer.invoke('subscriptions:unfreeze', args),
     checkIn: (args) => ipcRenderer.invoke('subscriptions:checkIn', args),
     getHistory: (args) => ipcRenderer.invoke('subscriptions:getHistory', args),
+  },
+  checkin: {
+    create: (args) => ipcRenderer.invoke('checkin:create', args),
   },
   payments: {
     getAll: (args) => ipcRenderer.invoke('payments:getAll', args),

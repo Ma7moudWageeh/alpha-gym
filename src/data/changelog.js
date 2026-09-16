@@ -1,5 +1,35 @@
 export const CHANGELOG_DATA = [
   {
+    version: "1.0.13",
+    releaseDate: "September 2026",
+    title: "Full Backup Archive, Auto-Snapshots & Financial Void Engine",
+    categories: [
+      {
+        name: "Data Safety & Backups",
+        items: [
+          "Consolidated backup archive: Bundles SQLite database, all athlete profile photos, and WhatsApp messaging preferences into a single .zip file.",
+          "Automated daily rolling snapshots: Silently retains the last 7 daily backups with automatic pruning.",
+          "Protected restore pipeline: Automatically captures a pre-restore emergency copy and validates database integrity before restoring."
+        ]
+      },
+      {
+        name: "Financial Management",
+        items: [
+          "Direct subscription voiding: Delete erroneous subscriptions directly from the client profile with automatic revenue rollback.",
+          "Selective athlete deletion: Choose whether to purge or preserve financial records when deleting a member profile.",
+          "Real-time revenue synchronization: Voided payments immediately deduct from Today's Revenue and financial reports."
+        ]
+      },
+      {
+        name: "UI & Stability",
+        items: [
+          "Enhanced Settings page with backup progress indicators, archive sizes, and safety notices.",
+          "Optimized memory and database connection handling during automated snapshots."
+        ]
+      }
+    ]
+  },
+  {
     version: "1.0.12",
     releaseDate: "September 2026",
     title: "Database Migration & Roster Connectivity Patch",

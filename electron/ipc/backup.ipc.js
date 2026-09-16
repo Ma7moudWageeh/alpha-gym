@@ -1,6 +1,8 @@
 const { ipcMain, dialog, app } = require('electron');
 const fs = require('fs');
 const path = require('path');
+const Database = require('better-sqlite3');
+const AdmZip = require('adm-zip');
 const db = require('../db');
 const { sanitizeClientCodes } = require('../schema');
 
@@ -10,57 +12,456 @@ function formatCsvField(str) {
   return `"${stringified}"`;
 }
 
-ipcMain.handle('backup:create', async (event, { userRole }) => {
+// ══════════════════════════════════════════════════════════════════════════════
+// ARCHIVE ENGINE (BACKUP & RESTORE)
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function createBackupArchive(targetZipPath) {
+  // 1. Flush active WAL journal to ensure 100% data consistency
   try {
-    if (userRole !== 'owner') {
-      return { error: 'Unauthorized: Only owners can create backups.' };
+    db.pragma('wal_checkpoint(FULL)');
+  } catch (e) {
+    console.warn('[backup] WAL checkpoint warning:', e.message);
+  }
+
+  const userData = app.getPath('userData');
+  const tempStaging = path.join(userData, `temp_staging_${Date.now()}`);
+  if (!fs.existsSync(tempStaging)) {
+    fs.mkdirSync(tempStaging, { recursive: true });
+  }
+
+  try {
+    // 2. Export clean locked-free snapshot of the SQLite database
+    const stagingDbPath = path.join(tempStaging, 'alpha-gym.db');
+    if (typeof db.backup === 'function') {
+      await db.backup(stagingDbPath);
+    } else {
+      const liveDb = path.join(userData, 'alpha-gym.db');
+      fs.copyFileSync(liveDb, stagingDbPath);
     }
 
-    const today = new Date().toISOString().split('T')[0];
-    const defaultFilename = `alpha-gym-backup-${today}.db`;
+    // 3. Stage profile photos
+    const stagingPhotos = path.join(tempStaging, 'photos');
+    fs.mkdirSync(stagingPhotos, { recursive: true });
+
+    const photoDirs = [
+      path.join(userData, 'client-photos'),
+      path.join(userData, 'photos')
+    ];
+
+    let photosCount = 0;
+    for (const pDir of photoDirs) {
+      if (fs.existsSync(pDir)) {
+        const files = fs.readdirSync(pDir);
+        for (const f of files) {
+          const src = path.join(pDir, f);
+          const dest = path.join(stagingPhotos, f);
+          if (fs.existsSync(src) && fs.statSync(src).isFile()) {
+            try {
+              fs.copyFileSync(src, dest);
+              photosCount++;
+            } catch (copyErr) {}
+          }
+        }
+      }
+    }
+
+    // 4. Gather system settings, WhatsApp configurations, and statistics
+    let totalMembers = 0;
+    try {
+      const countRow = db.prepare('SELECT COUNT(*) as c FROM clients').get();
+      totalMembers = countRow ? countRow.c : 0;
+    } catch (e) {}
+
+    let allSettings = {};
+    try {
+      const settingsRows = db.prepare('SELECT key, value FROM settings').all();
+      for (const s of settingsRows) {
+        allSettings[s.key] = s.value;
+      }
+    } catch (e) {}
+
+    const manifest = {
+      app: 'Alpha Gym',
+      version: app.getVersion() || '1.0.12',
+      createdAt: new Date().toISOString(),
+      timestamp: Date.now(),
+      totalMembers,
+      photosCount,
+      settings: allSettings
+    };
+
+    fs.writeFileSync(path.join(tempStaging, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+
+    // 5. Compress staging folder into target zip archive
+    const zip = new AdmZip();
+    zip.addLocalFile(stagingDbPath);
+    if (fs.existsSync(stagingPhotos)) {
+      zip.addLocalFolder(stagingPhotos, 'photos');
+    }
+    zip.addLocalFile(path.join(tempStaging, 'manifest.json'));
+
+    const targetDir = path.dirname(targetZipPath);
+    if (!fs.existsSync(targetDir)) {
+      fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    zip.writeZip(targetZipPath);
+
+    const stats = fs.statSync(targetZipPath);
+    const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+
+    return {
+      success: true,
+      filePath: targetZipPath,
+      fileName: path.basename(targetZipPath),
+      sizeMB,
+      totalMembers,
+      photosCount
+    };
+  } finally {
+    // Clean up temporary staging
+    try {
+      if (fs.existsSync(tempStaging)) {
+        fs.rmSync(tempStaging, { recursive: true, force: true });
+      }
+    } catch (e) {}
+  }
+}
+
+async function restoreBackupArchive(zipFilePath) {
+  if (!fs.existsSync(zipFilePath)) {
+    throw new Error('Selected backup archive does not exist.');
+  }
+
+  const userData = app.getPath('userData');
+  const tempVerify = path.join(userData, `temp_restore_verify_${Date.now()}`);
+  const preRestoreBackup = path.join(userData, 'pre_restore_backup');
+
+  // 1. Create emergency safety snapshot before touching any live data
+  try {
+    if (fs.existsSync(preRestoreBackup)) {
+      fs.rmSync(preRestoreBackup, { recursive: true, force: true });
+    }
+    fs.mkdirSync(preRestoreBackup, { recursive: true });
+
+    try { db.pragma('wal_checkpoint(FULL)'); } catch (e) {}
+
+    const liveDbPath = path.join(userData, 'alpha-gym.db');
+    if (fs.existsSync(liveDbPath)) {
+      fs.copyFileSync(liveDbPath, path.join(preRestoreBackup, 'alpha-gym.db'));
+    }
+
+    const livePhotos = path.join(userData, 'client-photos');
+    if (fs.existsSync(livePhotos)) {
+      const backupPhotos = path.join(preRestoreBackup, 'photos');
+      fs.mkdirSync(backupPhotos, { recursive: true });
+      for (const f of fs.readdirSync(livePhotos)) {
+        const src = path.join(livePhotos, f);
+        if (fs.statSync(src).isFile()) {
+          fs.copyFileSync(src, path.join(backupPhotos, f));
+        }
+      }
+    }
+  } catch (safetyErr) {
+    console.warn('[backup:restore] Safety snapshot warning:', safetyErr.message);
+  }
+
+  // 2. Unpack selected zip into verification directory
+  fs.mkdirSync(tempVerify, { recursive: true });
+  const zip = new AdmZip(zipFilePath);
+  zip.extractAllTo(tempVerify, true);
+
+  // 3. Locate SQLite database file inside archive
+  let candidateDb = path.join(tempVerify, 'alpha-gym.db');
+  if (!fs.existsSync(candidateDb)) {
+    candidateDb = path.join(tempVerify, 'alpha_gym.db');
+  }
+  if (!fs.existsSync(candidateDb)) {
+    const allFiles = fs.readdirSync(tempVerify);
+    const dbMatch = allFiles.find(f => f.endsWith('.db') || f.endsWith('.sqlite'));
+    if (dbMatch) {
+      candidateDb = path.join(tempVerify, dbMatch);
+    }
+  }
+
+  if (!fs.existsSync(candidateDb)) {
+    throw new Error('No valid SQLite database file found inside the backup archive.');
+  }
+
+  // 4. Run SQLite integrity check on candidate DB
+  const tempDb = new Database(candidateDb);
+  const check = tempDb.pragma('integrity_check');
+  tempDb.close();
+  if (!check || check[0]?.integrity_check !== 'ok') {
+    throw new Error('Database inside the backup is corrupted or failed SQLite integrity check.');
+  }
+
+  // 5. Close running live application database
+  try {
+    db.close();
+  } catch (e) {
+    console.warn('[backup:restore] Warning closing active DB:', e.message);
+  }
+
+  // 6. Replace live database file and remove stale WAL / SHM journals
+  const liveDbPath = path.join(userData, 'alpha-gym.db');
+  fs.copyFileSync(candidateDb, liveDbPath);
+
+  const walPath = path.join(userData, 'alpha-gym.db-wal');
+  const shmPath = path.join(userData, 'alpha-gym.db-shm');
+  try { if (fs.existsSync(walPath)) fs.unlinkSync(walPath); } catch (e) {}
+  try { if (fs.existsSync(shmPath)) fs.unlinkSync(shmPath); } catch (e) {}
+
+  // 7. Unpack & merge athlete profile photos
+  const unpackedPhotos = path.join(tempVerify, 'photos');
+  const targetPhotosDirs = [
+    path.join(userData, 'client-photos'),
+    path.join(userData, 'photos')
+  ];
+
+  if (fs.existsSync(unpackedPhotos)) {
+    for (const targetDir of targetPhotosDirs) {
+      if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
+      }
+      const files = fs.readdirSync(unpackedPhotos);
+      for (const f of files) {
+        const src = path.join(unpackedPhotos, f);
+        if (fs.statSync(src).isFile()) {
+          fs.copyFileSync(src, path.join(targetDir, f));
+        }
+      }
+    }
+  }
+
+  // 8. Clean up temp verification folder
+  try {
+    fs.rmSync(tempVerify, { recursive: true, force: true });
+  } catch (e) {}
+
+  // 9. Automatically relaunch the application to mount the restored database
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 1000);
+
+  return { success: true, message: 'Database and assets restored successfully. Relaunching application...' };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// AUTOMATED DAILY ROLLING SNAPSHOTS (LAST 7 DAYS)
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function runAutoDailyBackup() {
+  try {
+    const userData = app.getPath('userData');
+    const autoBackupsDir = path.join(userData, 'auto_backups');
+    if (!fs.existsSync(autoBackupsDir)) {
+      fs.mkdirSync(autoBackupsDir, { recursive: true });
+    }
+
+    const todayStr = new Date().toISOString().split('T')[0];
+    const todayBackupFile = path.join(autoBackupsDir, `auto_backup_${todayStr}.zip`);
+
+    if (!fs.existsSync(todayBackupFile)) {
+      console.log(`[AutoBackup] Generating daily rolling snapshot: auto_backup_${todayStr}.zip`);
+      await createBackupArchive(todayBackupFile);
+    }
+
+    // Retain strictly the last 7 daily snapshots
+    const files = fs.readdirSync(autoBackupsDir)
+      .filter(f => f.startsWith('auto_backup_') && f.endsWith('.zip'))
+      .map(f => ({
+        name: f,
+        fullPath: path.join(autoBackupsDir, f),
+        time: fs.statSync(path.join(autoBackupsDir, f)).mtimeMs
+      }))
+      .sort((a, b) => b.time - a.time);
+
+    if (files.length > 7) {
+      for (let i = 7; i < files.length; i++) {
+        try {
+          fs.unlinkSync(files[i].fullPath);
+          console.log(`[AutoBackup] Pruned older backup: ${files[i].name}`);
+        } catch (e) {}
+      }
+    }
+  } catch (err) {
+    console.error('[AutoBackup] Error executing auto snapshot:', err.message);
+  }
+}
+
+// Trigger daily snapshot silently 5 seconds after startup
+setTimeout(() => {
+  runAutoDailyBackup();
+}, 5000);
+
+// ══════════════════════════════════════════════════════════════════════════════
+// IPC HANDLERS
+// ══════════════════════════════════════════════════════════════════════════════
+
+ipcMain.handle('backup:exportFull', async (event, args = {}) => {
+  try {
+    const { userRole } = (args && typeof args === 'object') ? args : {};
+    if (userRole && userRole !== 'owner') {
+      return { error: 'Unauthorized: Only owners can export full backups.' };
+    }
+
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}`;
+    const defaultFilename = `AlphaGym_Backup_${dateStr}_${timeStr}.zip`;
 
     const { canceled, filePath } = await dialog.showSaveDialog({
-      title: 'Save Database Backup',
+      title: 'Export Full System Backup Package',
       defaultPath: defaultFilename,
-      filters: [{ name: 'SQLite Database', extensions: ['db', 'sqlite'] }]
+      filters: [{ name: 'Zip Archives (*.zip)', extensions: ['zip'] }]
     });
 
     if (canceled || !filePath) return { canceled: true };
 
-    await db.backup(filePath);
+    const result = await createBackupArchive(filePath);
+    return result;
+  } catch (err) {
+    console.error('[backup:exportFull] Error:', err);
+    return { error: err.message };
+  }
+});
 
-    return { success: true, filePath };
+ipcMain.handle('backup:restoreFull', async (event, args = {}) => {
+  try {
+    const { userRole, filePath } = (args && typeof args === 'object') ? args : {};
+    if (userRole && userRole !== 'owner') {
+      return { error: 'Unauthorized: Only owners can restore backups.' };
+    }
+
+    let targetPath = filePath;
+    if (!targetPath) {
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        title: 'Select Full Backup Package to Restore',
+        properties: ['openFile'],
+        filters: [{ name: 'Backup Archives (*.zip, *.agbackup)', extensions: ['zip', 'agbackup'] }]
+      });
+
+      if (canceled || !filePaths || filePaths.length === 0) return { canceled: true };
+      targetPath = filePaths[0];
+    }
+
+    const result = await restoreBackupArchive(targetPath);
+    return result;
+  } catch (err) {
+    console.error('[backup:restoreFull] Error:', err);
+    return { error: err.message };
+  }
+});
+
+// Backward-compatible aliases
+ipcMain.handle('backup:create', async (event, args = {}) => {
+  try {
+    const { userRole } = (args && typeof args === 'object') ? args : {};
+    if (userRole && userRole !== 'owner') {
+      return { error: 'Unauthorized: Only owners can create backups.' };
+    }
+    const now = new Date();
+    const dateStr = now.toISOString().split('T')[0];
+    const timeStr = `${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}`;
+    const defaultFilename = `AlphaGym_Backup_${dateStr}_${timeStr}.zip`;
+
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Save Full Backup',
+      defaultPath: defaultFilename,
+      filters: [{ name: 'Zip Archives (*.zip)', extensions: ['zip'] }]
+    });
+
+    if (canceled || !filePath) return { canceled: true };
+    return await createBackupArchive(filePath);
   } catch (err) {
     return { error: err.message };
   }
 });
 
-ipcMain.handle('backup:restore', async (event, { userRole }) => {
+ipcMain.handle('backup:restore', async (event, args = {}) => {
   try {
-    if (userRole !== 'owner') {
+    const { userRole, filePath } = (args && typeof args === 'object') ? args : {};
+    if (userRole && userRole !== 'owner') {
       return { error: 'Unauthorized: Only owners can restore backups.' };
     }
 
-    const { canceled, filePaths } = await dialog.showOpenDialog({
-      title: 'Select Backup File to Restore',
-      properties: ['openFile'],
-      filters: [{ name: 'SQLite Database', extensions: ['db', 'sqlite'] }]
-    });
+    let targetPath = filePath;
+    if (!targetPath) {
+      const { canceled, filePaths } = await dialog.showOpenDialog({
+        title: 'Select Backup to Restore',
+        properties: ['openFile'],
+        filters: [{ name: 'Backup Archives (*.zip, *.agbackup, *.db)', extensions: ['zip', 'agbackup', 'db', 'sqlite'] }]
+      });
+      if (canceled || !filePaths || filePaths.length === 0) return { canceled: true };
+      targetPath = filePaths[0];
+    }
 
-    if (canceled || !filePaths || filePaths.length === 0) return { canceled: true };
+    if (targetPath.endsWith('.zip') || targetPath.endsWith('.agbackup')) {
+      return await restoreBackupArchive(targetPath);
+    } else {
+      // Legacy SQLite file restore
+      const userData = app.getPath('userData');
+      const dbPath = path.join(userData, 'alpha-gym.db');
+      try { db.pragma('wal_checkpoint(TRUNCATE)'); } catch (e) {}
+      try { db.close(); } catch (e) {}
+      fs.copyFileSync(targetPath, dbPath);
+      setTimeout(() => { app.relaunch(); app.exit(0); }, 1000);
+      return { success: true, message: 'Database restored successfully. Relaunching application...' };
+    }
+  } catch (err) {
+    return { error: err.message };
+  }
+});
 
-    const restorePath = filePaths[0];
-    const dbPath = path.join(app.getPath('userData'), 'alpha-gym.db');
+ipcMain.handle('backup:getAutoBackupsList', async () => {
+  try {
+    const userData = app.getPath('userData');
+    const autoBackupsDir = path.join(userData, 'auto_backups');
+    if (!fs.existsSync(autoBackupsDir)) {
+      return { success: true, latestBackup: null, backups: [] };
+    }
 
-    // Perform WAL checkpoint to flush current DB
-    try {
-      db.pragma('wal_checkpoint(TRUNCATE)');
-    } catch (e) {}
+    const files = fs.readdirSync(autoBackupsDir)
+      .filter(f => f.endsWith('.zip'))
+      .map(f => {
+        const fullPath = path.join(autoBackupsDir, f);
+        const stats = fs.statSync(fullPath);
+        return {
+          fileName: f,
+          fullPath,
+          sizeMB: (stats.size / (1024 * 1024)).toFixed(2),
+          createdAt: stats.mtime.toISOString(),
+          date: stats.mtime.toISOString().split('T')[0],
+          time: stats.mtime.toLocaleTimeString()
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-    // Copy selected backup over live db
-    fs.copyFileSync(restorePath, dbPath);
+    return {
+      success: true,
+      latestBackup: files.length > 0 ? files[0] : null,
+      backups: files
+    };
+  } catch (err) {
+    return { success: false, error: err.message, latestBackup: null, backups: [] };
+  }
+});
 
-    return { success: true, message: 'Database restored successfully. Please restart the application.' };
+ipcMain.handle('backup:getBackupInfo', async (event, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) {
+      return { error: 'File not found.' };
+    }
+    const zip = new AdmZip(filePath);
+    const manifestEntry = zip.getEntry('manifest.json');
+    if (manifestEntry) {
+      const manifest = JSON.parse(manifestEntry.getData().toString('utf8'));
+      return { success: true, manifest };
+    }
+    return { success: true, manifest: null };
   } catch (err) {
     return { error: err.message };
   }

@@ -59,6 +59,9 @@ try {
     safeAddColumn('clients', 'start_date TEXT');
     safeAddColumn('clients', 'end_date TEXT');
     safeAddColumn('clients', 'freeze_reason TEXT DEFAULT NULL');
+
+    // Transactions Table Migrations
+    safeAddColumn('transactions', 'subscription_id INTEGER DEFAULT NULL');
   }
 
   ensureSchemaIntegrity(db);

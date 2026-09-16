@@ -1,6 +1,6 @@
 {
   "name": "alpha-gym",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "Alpha Gym - Management System",
   "main": "electron/main.js",
   "type": "module",
@@ -15,6 +15,7 @@
   "author": "Alpha Gym",
   "license": "MIT",
   "dependencies": {
+    "adm-zip": "^0.6.1",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^13.0.3",
     "electron-updater": "^6.8.9",

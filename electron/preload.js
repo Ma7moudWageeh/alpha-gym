@@ -64,6 +64,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     unfreeze: (args) => ipcRenderer.invoke('subscriptions:unfreeze', args),
     checkIn: (args) => ipcRenderer.invoke('subscriptions:checkIn', args),
     getHistory: (args) => ipcRenderer.invoke('subscriptions:getHistory', args),
+    delete: (args) => ipcRenderer.invoke('subscriptions:delete', args),
+    void: (args) => ipcRenderer.invoke('subscriptions:delete', args),
   },
   checkin: {
     create: (args) => ipcRenderer.invoke('checkin:create', args),
@@ -99,6 +101,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getHistoricalMonthlyData: (args) => ipcRenderer.invoke('reports:getHistoricalMonthlyData', args),
   },
   backup: {
+    exportFull: (args) => ipcRenderer.invoke('backup:exportFull', args),
+    restoreFull: (args) => ipcRenderer.invoke('backup:restoreFull', args),
+    getBackupInfo: (filePath) => ipcRenderer.invoke('backup:getBackupInfo', filePath),
+    getAutoBackupsList: () => ipcRenderer.invoke('backup:getAutoBackupsList'),
     create: (args) => ipcRenderer.invoke('backup:create', args),
     restore: (args) => ipcRenderer.invoke('backup:restore', args),
     exportClientsCsv: (args) => ipcRenderer.invoke('backup:exportClientsCsv', args),

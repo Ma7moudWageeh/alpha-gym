@@ -722,16 +722,75 @@ ipcMain.handle('clients:update', async (event, clientData) => {
   }
 });
 
-ipcMain.handle('clients:delete', async (event, { id, userRole }) => {
+ipcMain.handle('clients:delete', async (event, args = {}) => {
   try {
-    if (userRole !== 'owner') {
-      return { error: 'Unauthorized: Only owners can delete clients.' };
+    const { clientId, id, purgeFinancials, userRole } = (args && typeof args === 'object') ? args : {};
+    const targetId = clientId || id;
+    if (!targetId) return { success: false, error: 'Client ID is required' };
+
+    if (userRole && userRole !== 'owner') {
+      return { success: false, error: 'Unauthorized: Only owners can delete clients.' };
     }
 
-    db.prepare('DELETE FROM clients WHERE id = ?').run(id);
+    const runDelete = db.transaction(() => {
+      if (purgeFinancials) {
+        // 1. Delete all transactions linked to this client (reverting revenues)
+        try {
+          db.prepare(`DELETE FROM transactions WHERE client_id = ?`).run(targetId);
+        } catch (e) {}
+        // 2. Delete all payments linked to this client
+        try {
+          db.prepare(`DELETE FROM payments WHERE client_id = ?`).run(targetId);
+        } catch (e) {}
+      } else {
+        // Retain accounting records by anonymizing client_id
+        try {
+          db.prepare(`UPDATE transactions SET client_id = NULL WHERE client_id = ?`).run(targetId);
+        } catch (e) {}
+        try {
+          db.prepare(`UPDATE payments SET client_id = NULL WHERE client_id = ?`).run(targetId);
+        } catch (e) {}
+      }
+
+      // Delete attendance / check-in logs
+      try {
+        db.prepare(`DELETE FROM checkins WHERE client_id = ?`).run(targetId);
+      } catch (e) {}
+      try {
+        db.prepare(`DELETE FROM attendance WHERE client_id = ?`).run(targetId);
+      } catch (e) {}
+      try {
+        db.prepare(`DELETE FROM body_progress WHERE client_id = ?`).run(targetId);
+      } catch (e) {}
+      try {
+        db.prepare(`DELETE FROM alerts WHERE client_id = ?`).run(targetId);
+      } catch (e) {}
+
+      // Delete client subscriptions
+      try {
+        db.prepare(`DELETE FROM subscriptions WHERE client_id = ?`).run(targetId);
+      } catch (e) {}
+
+      // Clean up client photo if present
+      try {
+        const existingClient = db.prepare('SELECT profile_photo FROM clients WHERE id = ?').get(targetId);
+        const oldResolved = resolvePhotoPath(existingClient?.profile_photo);
+        if (oldResolved && fs.existsSync(oldResolved) && oldResolved.includes('client-photos')) {
+          fs.unlinkSync(oldResolved);
+        }
+      } catch (e) {}
+
+      // Delete master client record
+      db.prepare(`DELETE FROM clients WHERE id = ?`).run(targetId);
+
+      return true;
+    });
+
+    runDelete();
     return { success: true };
   } catch (err) {
-    return { error: err.message };
+    console.error('[clients:delete] Error deleting client:', err.message);
+    return { success: false, error: err.message };
   }
 });
 

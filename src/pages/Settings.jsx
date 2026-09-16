@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
-import { Plus, Edit2, Power, X, Database, Download, Upload, FileSpreadsheet, ShieldAlert, CheckCircle2, AlertTriangle, Users, Shield, Trash2, Eye, EyeOff, MessageSquare, Save } from 'lucide-react';
+import { Plus, Edit2, Power, X, Database, Download, Upload, FileSpreadsheet, ShieldAlert, CheckCircle2, AlertTriangle, Users, Shield, Trash2, Eye, EyeOff, MessageSquare, Save, Loader2, Archive } from 'lucide-react';
 import { formatDateDDMMYYYY } from '../utils/dateFormat';
 import WhatsNewModal from '../components/modals/WhatsNewModal';
 import packageJson from '../../package.json';
@@ -35,6 +35,9 @@ const Settings = () => {
   // Backup & Restore states
   const [backupMsg, setBackupMsg] = useState({ type: '', text: '' });
   const [isRestoreConfirmOpen, setIsRestoreConfirmOpen] = useState(false);
+  const [isExportingBackup, setIsExportingBackup] = useState(false);
+  const [isRestoringBackup, setIsRestoringBackup] = useState(false);
+  const [autoBackupData, setAutoBackupData] = useState({ latestBackup: null, backups: [] });
   const [isFactoryResetOpen, setIsFactoryResetOpen] = useState(false);
   const [factoryResetPhrase, setFactoryResetPhrase] = useState('');
   const [factoryResetError, setFactoryResetError] = useState('');
@@ -224,30 +227,75 @@ const Settings = () => {
     }
   };
 
-  // Backup & Restore Handlers
-  const handleCreateBackup = async () => {
-    if (!isOwner) return;
-    setBackupMsg({ type: '', text: '' });
-    const result = await window.electronAPI.backup.create({ userRole: user.role });
-    if (result.canceled) return;
-    if (result.error) {
-      setBackupMsg({ type: 'error', text: result.error });
-    } else {
-      setBackupMsg({ type: 'success', text: `Backup saved to: ${result.filePath}` });
+  const fetchAutoBackups = async () => {
+    try {
+      if (window.electronAPI?.backup?.getAutoBackupsList) {
+        const res = await window.electronAPI.backup.getAutoBackupsList();
+        if (res?.success) {
+          setAutoBackupData({
+            latestBackup: res.latestBackup,
+            backups: res.backups || []
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load auto backups list:', e);
     }
   };
 
-  const handleRestoreBackup = async () => {
+  useEffect(() => {
+    if (activeTab === 'backup') {
+      fetchAutoBackups();
+    }
+  }, [activeTab]);
+
+  // Backup & Restore Handlers
+  const handleExportFullBackup = async () => {
+    if (!isOwner) return;
+    setBackupMsg({ type: '', text: '' });
+    setIsExportingBackup(true);
+    try {
+      const exportFn = window.electronAPI?.backup?.exportFull || window.electronAPI?.backup?.create;
+      const result = await exportFn({ userRole: user.role });
+      if (result?.canceled) return;
+      if (result?.error) {
+        setBackupMsg({ type: 'error', text: result.error });
+      } else {
+        const sizeInfo = result.sizeMB ? ` (${result.sizeMB} MB)` : '';
+        setBackupMsg({
+          type: 'success',
+          text: `Full backup package exported successfully! Saved to: ${result.filePath}${sizeInfo}`
+        });
+        fetchAutoBackups();
+      }
+    } catch (err) {
+      setBackupMsg({ type: 'error', text: err.message || 'Failed to export backup.' });
+    } finally {
+      setIsExportingBackup(false);
+    }
+  };
+
+  const handleRestoreFullBackup = async () => {
     if (!isOwner) return;
     setIsRestoreConfirmOpen(false);
     setBackupMsg({ type: '', text: '' });
-
-    const result = await window.electronAPI.backup.restore({ userRole: user.role });
-    if (result.canceled) return;
-    if (result.error) {
-      setBackupMsg({ type: 'error', text: result.error });
-    } else {
-      setBackupMsg({ type: 'success', text: result.message || 'Database restored successfully!' });
+    setIsRestoringBackup(true);
+    try {
+      const restoreFn = window.electronAPI?.backup?.restoreFull || window.electronAPI?.backup?.restore;
+      const result = await restoreFn({ userRole: user.role });
+      if (result?.canceled) return;
+      if (result?.error) {
+        setBackupMsg({ type: 'error', text: result.error });
+      } else {
+        setBackupMsg({
+          type: 'success',
+          text: result.message || 'Backup restored successfully! Application is restarting...'
+        });
+      }
+    } catch (err) {
+      setBackupMsg({ type: 'error', text: err.message || 'Failed to restore backup.' });
+    } finally {
+      setIsRestoringBackup(false);
     }
   };
 
@@ -557,50 +605,95 @@ const Settings = () => {
             </div>
           )}
 
+          {/* Auto-Backup Status Badge */}
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between p-4 bg-[#121721] rounded-2xl border border-[#222B3D] gap-3">
+            <div className="flex items-center gap-3">
+              <span className="flex h-3 w-3 relative flex-shrink-0">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-emerald-500"></span>
+              </span>
+              <div>
+                <p className="text-xs font-bold text-white uppercase tracking-wider">Automated Daily Snapshot Engine</p>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {autoBackupData.latestBackup ? (
+                    <>
+                      Latest Snapshot: <strong className="text-emerald-400 font-mono">{autoBackupData.latestBackup.date}</strong> ({autoBackupData.latestBackup.sizeMB} MB) • Rolling 7-day retention active
+                    </>
+                  ) : (
+                    <>Silent daily snapshots run on startup and automatically maintain the last 7 daily archives.</>
+                  )}
+                </p>
+              </div>
+            </div>
+            <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5 flex-shrink-0">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Protected
+            </span>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Create Backup */}
+            {/* Export Full Backup */}
             <div className="card p-6 bg-brand-panel border-[#222B3D] space-y-4">
               <div className="flex items-center space-x-3">
-                <div className="p-3 bg-brand-accent/10 rounded border border-brand-accent/20">
+                <div className="p-3 bg-brand-accent/10 rounded-xl border border-brand-accent/20">
                   <Download className="w-6 h-6 text-brand-accent" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-black font-display uppercase tracking-wider text-white">Create Database Backup</h3>
-                  <p className="text-xs text-slate-400">Safely save a copy of the SQLite database.</p>
+                  <h3 className="text-lg font-black font-display uppercase tracking-wider text-white">Export Full Backup</h3>
+                  <p className="text-xs text-slate-400">Consolidated all-in-one system archive (.zip)</p>
                 </div>
               </div>
               <p className="text-sm text-slate-300 leading-relaxed">
-                Exports all client profiles, subscription records, payment history, and system settings to a standalone `.db` file.
+                Includes database, all athlete profile photos, and WhatsApp messaging preferences.
               </p>
               <button
-                onClick={handleCreateBackup}
-                disabled={!isOwner}
-                className="w-full py-2.5 px-4 bg-brand-accent hover:bg-[#b8e600] disabled:opacity-50 text-white font-semibold rounded shadow transition-colors"
+                onClick={handleExportFullBackup}
+                disabled={!isOwner || isExportingBackup}
+                className="w-full py-2.5 px-4 bg-[#CCFF00] hover:bg-[#b8e600] active:scale-[0.99] disabled:opacity-50 text-black font-black uppercase tracking-wider text-xs rounded-xl shadow-lg shadow-[#CCFF00]/10 transition-all flex items-center justify-center gap-2"
               >
-                Create Backup File
+                {isExportingBackup ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Archiving Assets & Compressing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Archive className="w-4 h-4" />
+                    <span>Export Full Backup (.zip)</span>
+                  </>
+                )}
               </button>
             </div>
 
-            {/* Restore Backup */}
+            {/* Restore Full Backup */}
             <div className="card p-6 bg-brand-panel border-[#222B3D] space-y-4">
               <div className="flex items-center space-x-3">
-                <div className="p-3 bg-brand-danger/10 rounded border border-brand-danger/20">
-                  <Upload className="w-6 h-6 text-brand-danger" />
+                <div className="p-3 bg-rose-500/10 rounded-xl border border-rose-500/20">
+                  <Upload className="w-6 h-6 text-rose-400" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-black font-display uppercase tracking-wider text-white">Restore Database</h3>
-                  <p className="text-xs text-slate-400">Overwrites current database with a backup file.</p>
+                  <h3 className="text-lg font-black font-display uppercase tracking-wider text-white">Restore From Backup</h3>
+                  <p className="text-xs text-slate-400">Unpacks and restores full archive package.</p>
                 </div>
               </div>
               <p className="text-sm text-slate-300 leading-relaxed">
-                Replaces current live data with a previously saved `.db` backup file. Requires confirmation.
+                Replaces current database, athlete photos, and configurations with a verified backup.
               </p>
               <button
                 onClick={() => setIsRestoreConfirmOpen(true)}
-                disabled={!isOwner}
-                className="w-full py-2.5 px-4 bg-brand-danger hover:bg-red-600 disabled:opacity-50 text-white font-semibold rounded shadow transition-colors"
+                disabled={!isOwner || isRestoringBackup}
+                className="w-full py-2.5 px-4 bg-rose-600 hover:bg-rose-500 active:scale-[0.99] disabled:opacity-50 text-white font-black uppercase tracking-wider text-xs rounded-xl shadow-lg shadow-rose-600/20 transition-all flex items-center justify-center gap-2"
               >
-                Restore from Backup File
+                {isRestoringBackup ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Verifying & Restoring...</span>
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" />
+                    <span>Restore From Backup</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1012,39 +1105,43 @@ const Settings = () => {
 
       {/* Restore Confirmation Modal */}
       {isRestoreConfirmOpen && (
-        <div className="fixed inset-0 bg-[#0B0E14]/80 flex items-center justify-center p-4 z-[70]">
-          <div className="bg-brand-surface border border-brand-danger/50 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="px-6 py-4 border-b border-[#222B3D] flex justify-between items-center bg-brand-danger/10">
-              <h3 className="text-lg font-black font-display uppercase tracking-wider text-brand-danger flex items-center">
-                <AlertTriangle className="w-5 h-5 mr-2" /> Confirm Database Restore
+        <div className="fixed inset-0 bg-[#0B0E14]/85 backdrop-blur-sm flex items-center justify-center p-4 z-[70]">
+          <div className="bg-brand-surface border border-rose-500/50 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden space-y-4">
+            <div className="px-6 py-4 border-b border-[#222B3D] flex justify-between items-center bg-rose-500/10">
+              <h3 className="text-sm sm:text-base font-black font-display uppercase tracking-wider text-rose-400 flex items-center gap-2">
+                <AlertTriangle className="w-5 h-5 text-rose-500 flex-shrink-0" />
+                ⚠️ DANGER: OVERWRITE EXISTING DATA
               </h3>
               <button onClick={() => setIsRestoreConfirmOpen(false)} className="text-slate-400 hover:text-white">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-6 space-y-4">
+            <div className="p-6 space-y-4 pt-0">
               <p className="text-slate-200 text-sm leading-relaxed">
-                <strong>WARNING:</strong> Restoring a backup will completely overwrite your current database. All data added since the backup was taken will be lost.
+                Restoring will replace your active database and photos with the selected backup archive. An emergency safety copy will be saved automatically before restoring. The application will restart upon completion.
               </p>
-              <p className="text-slate-400 text-xs">
-                Are you sure you wish to select a backup file to restore?
-              </p>
+
+              <div className="p-3 bg-[#0B0E14] rounded-xl border border-[#222B3D] text-xs text-slate-400 space-y-1">
+                <p className="text-slate-300 font-semibold">• SQLite integrity check will run prior to applying changes.</p>
+                <p className="text-slate-300 font-semibold">• Current database & photos will be saved to <code className="text-brand-accent">pre_restore_backup/</code>.</p>
+                <p className="text-rose-400 font-semibold">• Data entered since this backup was created will be replaced.</p>
+              </div>
 
               <div className="flex justify-end space-x-3 pt-4 border-t border-[#222B3D]">
                 <button
                   type="button"
                   onClick={() => setIsRestoreConfirmOpen(false)}
-                  className="px-4 py-2.5 bg-[#181E2A] hover:bg-slate-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest"
+                  className="px-4 py-2.5 bg-[#181E2A] hover:bg-slate-700 text-white rounded-xl text-xs font-bold uppercase tracking-wider transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   type="button"
-                  onClick={handleRestoreBackup}
-                  className="px-4 py-2.5 bg-brand-danger hover:bg-red-600 text-black rounded-xl text-sm font-semibold shadow"
+                  onClick={handleRestoreFullBackup}
+                  className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-black uppercase tracking-wider shadow-lg shadow-rose-600/20 transition-all"
                 >
-                  Proceed to Restore
+                  I Understand, Restore
                 </button>
               </div>
             </div>

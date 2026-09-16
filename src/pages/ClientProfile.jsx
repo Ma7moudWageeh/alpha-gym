@@ -495,6 +495,13 @@ const ClientProfile = () => {
   const [freezeError, setFreezeError] = useState('');
   const [freezing, setFreezing] = useState(false);
 
+  // Selective client delete & subscription void states
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [purgeFinancials, setPurgeFinancials] = useState(false);
+  const [deletingClient, setDeletingClient] = useState(false);
+  const [selectedSubToVoid, setSelectedSubToVoid] = useState(null);
+  const [voidingSub, setVoidingSub] = useState(false);
+
   useEffect(() => {
     if (toastMessage) {
       const timer = setTimeout(() => setToastMessage(''), 4000);
@@ -528,12 +535,51 @@ const ClientProfile = () => {
     fetchPackages();
   }, [fetchClient, fetchPackages]);
 
-  const handleDelete = async () => {
-    if (!isOwner) return;
-    if (!window.confirm(`Delete "${client.name}" permanently? All records will be removed.`)) return;
-    const res = await window.electronAPI.clients.delete({ id: client.id, userRole: user.role });
-    if (res.success) navigate('/clients');
-    else alert(res.error || 'Failed to delete client');
+  const handleConfirmDeleteClient = async () => {
+    if (!isOwner || !client) return;
+    setDeletingClient(true);
+    try {
+      const res = await window.electronAPI.clients.delete({
+        clientId: client.id,
+        id: client.id,
+        userRole: user?.role,
+        purgeFinancials
+      });
+      if (res?.success) {
+        setShowDeleteModal(false);
+        window.dispatchEvent(new Event('dashboard-refresh'));
+        navigate('/clients');
+      } else {
+        alert(res?.error || 'Failed to delete client');
+      }
+    } catch (err) {
+      alert(err.message || 'Failed to delete client');
+    } finally {
+      setDeletingClient(false);
+    }
+  };
+
+  const handleConfirmVoidSubscription = async () => {
+    if (!selectedSubToVoid || !client) return;
+    setVoidingSub(true);
+    try {
+      const res = await window.electronAPI.subscriptions.delete({
+        clientId: client.id,
+        subscriptionId: selectedSubToVoid.id
+      });
+      if (res?.success) {
+        setSelectedSubToVoid(null);
+        await fetchClient();
+        window.dispatchEvent(new Event('dashboard-refresh'));
+        setToastMessage('Subscription voided and financial records updated.');
+      } else {
+        alert(res?.error || 'Failed to void subscription');
+      }
+    } catch (err) {
+      alert(err.message || 'Failed to void subscription');
+    } finally {
+      setVoidingSub(false);
+    }
   };
 
   const handleFileSelected = async (e) => {
@@ -710,7 +756,10 @@ const ClientProfile = () => {
 
           {isOwner && (
             <button
-              onClick={handleDelete}
+              onClick={() => {
+                setPurgeFinancials(false);
+                setShowDeleteModal(true);
+              }}
               className="flex items-center gap-2 px-4 py-2.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 text-red-400 rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors"
             >
               <Trash2 className="w-4 h-4" /> Delete Client
@@ -996,6 +1045,7 @@ const ClientProfile = () => {
                       <th className="px-5 py-3 font-medium">Paid</th>
                       <th className="px-5 py-3 font-medium">Remaining</th>
                       <th className="px-5 py-3 font-medium">Status</th>
+                      {isOwner && <th className="px-5 py-3 font-medium text-right">Actions</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
@@ -1014,9 +1064,22 @@ const ClientProfile = () => {
                           )}
                         </td>
                         <td className="px-5 py-3.5"><StatusBadge status={sub.status} /></td>
+                        {isOwner && (
+                          <td className="px-5 py-3.5 text-right">
+                            <button
+                              onClick={() => setSelectedSubToVoid(sub)}
+                              title="Void Subscription & Revert Revenue"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                            >
+                              <svg className="w-4 h-4 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     )) : (
-                      <tr><td colSpan={7} className="px-5 py-10 text-center text-slate-500">No subscriptions yet.</td></tr>
+                      <tr><td colSpan={isOwner ? 8 : 7} className="px-5 py-10 text-center text-slate-500">No subscriptions yet.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -1317,6 +1380,98 @@ const ClientProfile = () => {
                   Close
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Client Confirmation Modal */}
+      {showDeleteModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-500">
+              <span className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xl">⚠️</span>
+              <h3 className="text-lg font-bold text-slate-100">Delete Athlete Profile</h3>
+            </div>
+            
+            <p className="text-sm text-slate-400 leading-relaxed">
+              Are you sure you want to delete <strong className="text-slate-200">{client.name}</strong>? This action cannot be undone.
+            </p>
+
+            {/* Financial Choice Box */}
+            <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800 space-y-2">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={purgeFinancials}
+                  onChange={(e) => setPurgeFinancials(e.target.checked)}
+                  className="mt-1 w-4 h-4 rounded border-slate-700 bg-slate-900 text-rose-600 focus:ring-rose-500"
+                />
+                <div className="text-xs">
+                  <span className="font-semibold text-slate-200 block">
+                    Purge all financial records & receipts
+                  </span>
+                  <span className="text-slate-400">
+                    Check this if this account was created by mistake. This will immediately deduct the collected amounts from Today's Revenue and financial reports.
+                  </span>
+                </div>
+              </label>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setShowDeleteModal(false)}
+                disabled={deletingClient}
+                className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmDeleteClient}
+                disabled={deletingClient}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-lg transition-colors shadow-lg shadow-rose-600/20 disabled:opacity-50"
+              >
+                {deletingClient ? 'Deleting...' : 'Confirm Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Void Subscription Confirmation Modal */}
+      {selectedSubToVoid && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center gap-3 text-rose-500">
+              <span className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xl">⚠️</span>
+              <h3 className="text-lg font-bold text-slate-100">Void Subscription</h3>
+            </div>
+            
+            <p className="text-sm text-slate-400 leading-relaxed">
+              Are you sure you want to void this subscription (<strong className="text-slate-200">{selectedSubToVoid.package_title || 'Subscription'}</strong>)? This action cannot be undone.
+            </p>
+
+            <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800 text-xs text-slate-400 space-y-1.5">
+              <p>• Period: <span className="font-mono text-slate-300">{formatDateDDMMYYYY(selectedSubToVoid.start_date)}</span> to <span className="font-mono text-slate-300">{formatDateDDMMYYYY(selectedSubToVoid.end_date)}</span></p>
+              <p>• Paid Amount: <span className="text-[#CCFF00] font-semibold">{selectedSubToVoid.paid_amount !== undefined && selectedSubToVoid.paid_amount !== null ? selectedSubToVoid.paid_amount : (selectedSubToVoid.price || 0)} EGP</span> will be deducted from Today's Revenue and financial reports.</p>
+              <p>• Athlete active dates and status will roll back to the previous subscription or clear to no plan.</p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                onClick={() => setSelectedSubToVoid(null)}
+                disabled={voidingSub}
+                className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleConfirmVoidSubscription}
+                disabled={voidingSub}
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-lg transition-colors shadow-lg shadow-rose-600/20 disabled:opacity-50"
+              >
+                {voidingSub ? 'Voiding...' : 'Confirm Void'}
+              </button>
             </div>
           </div>
         </div>

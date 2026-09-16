@@ -81,10 +81,17 @@ ipcMain.handle('subscriptions:create', async (event, args = {}) => {
 
       try {
         db.prepare(`
-          INSERT INTO transactions (client_id, type, amount, category, date, notes)
-          VALUES (?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
-        `).run(client_id, amountPaid, note || `Subscription: ${pkg.title}`);
-      } catch (e) {}
+          INSERT INTO transactions (client_id, subscription_id, type, amount, category, date, notes)
+          VALUES (?, ?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
+        `).run(client_id, subId, amountPaid, note || `Subscription: ${pkg.title}`);
+      } catch (e) {
+        try {
+          db.prepare(`
+            INSERT INTO transactions (client_id, type, amount, category, date, notes)
+            VALUES (?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
+          `).run(client_id, amountPaid, note || `Subscription: ${pkg.title}`);
+        } catch (e2) {}
+      }
 
       return subId;
     })();
@@ -183,10 +190,17 @@ ipcMain.handle('subscriptions:renew', async (event, { client_id, package_id, sta
 
       try {
         db.prepare(`
-          INSERT INTO transactions (client_id, type, amount, category, date, notes)
-          VALUES (?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
-        `).run(client_id, amountPaid, note || `Renewal: ${pkg.title}`);
-      } catch (e) {}
+          INSERT INTO transactions (client_id, subscription_id, type, amount, category, date, notes)
+          VALUES (?, ?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
+        `).run(client_id, subId, amountPaid, note || `Renewal: ${pkg.title}`);
+      } catch (e) {
+        try {
+          db.prepare(`
+            INSERT INTO transactions (client_id, type, amount, category, date, notes)
+            VALUES (?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
+          `).run(client_id, amountPaid, note || `Renewal: ${pkg.title}`);
+        } catch (e2) {}
+      }
 
       return subId;
     })();
@@ -447,5 +461,92 @@ ipcMain.handle('subscriptions:getHistory', async (event, { client_id }) => {
     return { success: true, history };
   } catch (err) {
     return { error: err.message };
+  }
+});
+
+ipcMain.handle('subscriptions:delete', async (event, args = {}) => {
+  try {
+    const { clientId, client_id, subscriptionId, subscription_id, id } = (args && typeof args === 'object') ? args : {};
+    const subId = subscriptionId || id || subscription_id;
+    if (!subId) return { success: false, error: 'Subscription ID is required' };
+
+    const runVoid = db.transaction(() => {
+      // 1. Fetch subscription details to know what to deduct
+      const sub = db.prepare(`SELECT * FROM subscriptions WHERE id = ?`).get(subId);
+      if (!sub) throw new Error('Subscription not found');
+      const targetClientId = clientId || client_id || sub.client_id;
+
+      // 2. Delete associated transactions (created around this subscription)
+      try {
+        db.prepare(`DELETE FROM transactions WHERE subscription_id = ?`).run(subId);
+      } catch (e) {
+        try {
+          db.prepare(`DELETE FROM transactions WHERE client_id = ? AND created_at = ?`).run(targetClientId, sub.created_at);
+        } catch (e2) {}
+      }
+
+      // Also clean up any transactions matching payments of this subscription
+      try {
+        const payments = db.prepare(`SELECT * FROM payments WHERE subscription_id = ?`).all(subId);
+        for (const p of payments) {
+          try {
+            const tx = db.prepare(`
+              SELECT id FROM transactions 
+              WHERE client_id = ? AND amount = ? 
+              ORDER BY id DESC LIMIT 1
+            `).get(targetClientId, p.amount);
+            if (tx) {
+              db.prepare(`DELETE FROM transactions WHERE id = ?`).run(tx.id);
+            }
+          } catch (e) {}
+        }
+      } catch (e) {}
+
+      // Delete payments
+      db.prepare(`DELETE FROM payments WHERE subscription_id = ?`).run(subId);
+
+      // 3. Delete the subscription itself
+      db.prepare(`DELETE FROM subscriptions WHERE id = ?`).run(subId);
+
+      // 4. Recalculate client remaining debt
+      const debtAgg = db.prepare(`
+        SELECT COALESCE(SUM(remaining_amount), 0) AS total_debt 
+        FROM subscriptions 
+        WHERE client_id = ?
+      `).get(targetClientId);
+      const newDebt = debtAgg ? debtAgg.total_debt : 0;
+
+      // 5. Rollback client start_date, end_date, and status to the latest remaining subscription (if any)
+      const previousSub = db.prepare(`
+        SELECT * FROM subscriptions 
+        WHERE client_id = ? 
+        ORDER BY end_date DESC, id DESC 
+        LIMIT 1
+      `).get(targetClientId);
+
+      if (previousSub) {
+        db.prepare(`
+          UPDATE clients 
+          SET start_date = ?, end_date = ?, status = ?, remaining_debt = ? 
+          WHERE id = ?
+        `).run(previousSub.start_date, previousSub.end_date, previousSub.status || 'active', newDebt, targetClientId);
+      } else {
+        // No remaining subscriptions -> Set to NO PLAN / INACTIVE
+        db.prepare(`
+          UPDATE clients 
+          SET start_date = NULL, end_date = NULL, status = 'active', remaining_debt = ? 
+          WHERE id = ?
+        `).run(newDebt, targetClientId);
+      }
+
+      return true;
+    });
+
+    runVoid();
+    db.syncAllSubscriptionStatuses(db);
+    return { success: true };
+  } catch (err) {
+    console.error('[subscriptions:delete] Error voiding subscription:', err.message);
+    return { success: false, error: err.message };
   }
 });

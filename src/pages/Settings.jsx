@@ -1,9 +1,27 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
-import { Plus, Edit2, Power, X, Database, Download, Upload, FileSpreadsheet, ShieldAlert, CheckCircle2, AlertTriangle, Users, Shield, Trash2, Eye, EyeOff, MessageSquare, Save, Loader2, Archive } from 'lucide-react';
+import { Plus, Edit2, Power, X, Database, Download, Upload, FileSpreadsheet, ShieldAlert, CheckCircle2, AlertTriangle, Users, Shield, Trash2, Eye, EyeOff, MessageSquare, Save, Loader2, Archive, Send, Cloud, HelpCircle, ChevronDown, ChevronUp, Key, Hash, ExternalLink, ShieldCheck, Unlink, RefreshCw } from 'lucide-react';
 import { formatDateDDMMYYYY } from '../utils/dateFormat';
 import WhatsNewModal from '../components/modals/WhatsNewModal';
 import packageJson from '../../package.json';
+
+function formatDateTime(isoStr) {
+  if (!isoStr) return null;
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
+  } catch (e) {
+    return isoStr;
+  }
+}
 
 const Settings = () => {
   const { user } = useContext(AuthContext);
@@ -42,6 +60,25 @@ const Settings = () => {
   const [factoryResetPhrase, setFactoryResetPhrase] = useState('');
   const [factoryResetError, setFactoryResetError] = useState('');
   const [factoryResetLoading, setFactoryResetLoading] = useState(false);
+
+  // Telegram Cloud Sync states
+  const [telegramConfig, setTelegramConfig] = useState({
+    botToken: '',
+    chatId: '',
+    enabled: false,
+    verified: false,
+    lastSentDate: null
+  });
+  const [showBotToken, setShowBotToken] = useState(false);
+  const [isSavingTelegram, setIsSavingTelegram] = useState(false);
+  const [isTestingTelegram, setIsTestingTelegram] = useState(false);
+  const [isSendingCode, setIsSendingCode] = useState(false);
+  const [isConfirmingCode, setIsConfirmingCode] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
+  const [telegramMsg, setTelegramMsg] = useState({ type: '', text: '' });
 
   // Staff management states
   const [staffList, setStaffList] = useState([]);
@@ -243,11 +280,183 @@ const Settings = () => {
     }
   };
 
+  const fetchTelegramConfig = async () => {
+    try {
+      if (window.electronAPI?.backup?.getTelegramConfig) {
+        const res = await window.electronAPI.backup.getTelegramConfig();
+        if (res?.success) {
+          setTelegramConfig({
+            botToken: res.botToken || '',
+            chatId: res.chatId || '',
+            enabled: !!res.enabled,
+            verified: !!res.verified,
+            lastSentDate: res.lastSentDate || null
+          });
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to load Telegram config:', e);
+    }
+  };
+
   useEffect(() => {
     if (activeTab === 'backup') {
       fetchAutoBackups();
+      fetchTelegramConfig();
     }
   }, [activeTab]);
+
+  const handleOpenOfficialBot = async () => {
+    try {
+      if (window.electronAPI?.system?.openExternal) {
+        await window.electronAPI.system.openExternal('https://t.me/AlphaSupportingBot');
+      } else {
+        window.open('https://t.me/AlphaSupportingBot', '_blank');
+      }
+    } catch (e) {
+      console.error('Failed to open official Telegram bot:', e);
+    }
+  };
+
+  const handleSendVerificationCode = async () => {
+    if (!isOwner) return;
+    if (!telegramConfig.chatId?.trim()) {
+      setTelegramMsg({ type: 'error', text: 'Please enter your Account Link Code (Chat ID) first.' });
+      return;
+    }
+    setIsSendingCode(true);
+    setTelegramMsg({ type: '', text: '' });
+    try {
+      const res = await window.electronAPI.backup.sendVerificationCode(telegramConfig.chatId.trim());
+      if (res?.success) {
+        setOtpSent(true);
+        setTelegramMsg({ type: 'success', text: 'A 6-digit code was sent to your Telegram. Enter it below:' });
+      } else {
+        setTelegramMsg({ type: 'error', text: res?.error || 'Failed to dispatch verification code.' });
+      }
+    } catch (err) {
+      setTelegramMsg({ type: 'error', text: err.message || 'An error occurred while sending verification code.' });
+    } finally {
+      setIsSendingCode(false);
+    }
+  };
+
+  const handleConfirmVerificationCode = async () => {
+    if (!isOwner) return;
+    if (!otpCode?.trim() || otpCode.trim().length !== 6) {
+      setTelegramMsg({ type: 'error', text: 'Please enter the 6-digit verification code.' });
+      return;
+    }
+    setIsConfirmingCode(true);
+    setTelegramMsg({ type: '', text: '' });
+    try {
+      const res = await window.electronAPI.backup.confirmVerificationCode(otpCode.trim());
+      if (res?.success) {
+        setTelegramConfig(prev => ({
+          ...prev,
+          verified: true,
+          enabled: true,
+          chatId: res.chatId || prev.chatId
+        }));
+        setOtpSent(false);
+        setOtpCode('');
+        setTelegramMsg({ type: 'success', text: 'Telegram account verified successfully!' });
+        setTimeout(() => setTelegramMsg({ type: '', text: '' }), 5000);
+      } else {
+        setTelegramMsg({ type: 'error', text: res?.error || 'Invalid or expired verification code.' });
+      }
+    } catch (err) {
+      setTelegramMsg({ type: 'error', text: err.message || 'Verification failed.' });
+    } finally {
+      setIsConfirmingCode(false);
+    }
+  };
+
+  const handleDisconnectTelegram = async () => {
+    if (!isOwner) return;
+    setIsDisconnecting(true);
+    setTelegramMsg({ type: '', text: '' });
+    try {
+      const res = await window.electronAPI.backup.disconnectTelegram();
+      if (res?.success) {
+        setTelegramConfig(prev => ({
+          ...prev,
+          verified: false,
+          enabled: false
+        }));
+        setOtpSent(false);
+        setOtpCode('');
+        setTelegramMsg({ type: 'success', text: 'Telegram account disconnected.' });
+        setTimeout(() => setTelegramMsg({ type: '', text: '' }), 4000);
+      } else {
+        setTelegramMsg({ type: 'error', text: res?.error || 'Failed to disconnect.' });
+      }
+    } catch (err) {
+      setTelegramMsg({ type: 'error', text: err.message || 'Failed to disconnect.' });
+    } finally {
+      setIsDisconnecting(false);
+    }
+  };
+
+  const handleToggleAutoSync = async () => {
+    if (!isOwner || !telegramConfig.verified) return;
+    const newEnabled = !telegramConfig.enabled;
+    setTelegramConfig(prev => ({ ...prev, enabled: newEnabled }));
+    try {
+      await window.electronAPI.backup.saveTelegramConfig({ enabled: newEnabled });
+    } catch (err) {
+      console.warn('Failed to save auto-sync toggle:', err);
+    }
+  };
+
+  const handleSaveTelegramConfig = async () => {
+    if (!isOwner) return;
+    setIsSavingTelegram(true);
+    setTelegramMsg({ type: '', text: '' });
+    try {
+      const res = await window.electronAPI.backup.saveTelegramConfig(telegramConfig);
+      if (res?.success) {
+        setTelegramMsg({ type: 'success', text: 'Configuration saved successfully.' });
+        setTimeout(() => setTelegramMsg({ type: '', text: '' }), 5000);
+      } else {
+        setTelegramMsg({ type: 'error', text: res?.error || 'Failed to save configuration.' });
+      }
+    } catch (err) {
+      setTelegramMsg({ type: 'error', text: err.message || 'An error occurred while saving configuration.' });
+    } finally {
+      setIsSavingTelegram(false);
+    }
+  };
+
+  const handleTestTelegramBackup = async () => {
+    if (!isOwner) return;
+    if (!telegramConfig.verified) {
+      setTelegramMsg({ type: 'error', text: 'Telegram account is not verified. Please complete verification first.' });
+      return;
+    }
+    if (!telegramConfig.chatId?.trim()) {
+      setTelegramMsg({ type: 'error', text: 'Please enter your Account Link Code (Chat ID) first.' });
+      return;
+    }
+    setIsTestingTelegram(true);
+    setTelegramMsg({ type: '', text: '' });
+    try {
+      const res = await window.electronAPI.backup.testTelegram(telegramConfig);
+      if (res?.success) {
+        setTelegramConfig(prev => ({ ...prev, lastSentDate: res.lastSentDate }));
+        setTelegramMsg({
+          type: 'success',
+          text: `Cloud backup sent successfully! (${res.sizeMB} MB)`
+        });
+      } else {
+        setTelegramMsg({ type: 'error', text: res?.error || 'Failed to send backup to Telegram.' });
+      }
+    } catch (err) {
+      setTelegramMsg({ type: 'error', text: err.message || 'An error occurred while sending backup.' });
+    } finally {
+      setIsTestingTelegram(false);
+    }
+  };
 
   // Backup & Restore Handlers
   const handleExportFullBackup = async () => {
@@ -628,6 +837,380 @@ const Settings = () => {
             <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5 flex-shrink-0">
               <CheckCircle2 className="w-3.5 h-3.5" /> Protected
             </span>
+          </div>
+
+          {/* ══════════════════════════════════════════════════════════════════════ */}
+          {/* Telegram Cloud Sync Section                                         */}
+          {/* ══════════════════════════════════════════════════════════════════════ */}
+          <div className="card p-6 bg-brand-panel border-[#222B3D] space-y-6 rounded-2xl">
+            {/* Header & Status & Auto-Sync Toggle */}
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-[#222B3D]">
+              <div className="flex items-start sm:items-center gap-3.5">
+                <div className="p-3 bg-sky-500/10 rounded-xl border border-sky-500/20 flex-shrink-0">
+                  <Send className="w-6 h-6 text-sky-400 rotate-[-20deg]" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-black font-display uppercase tracking-wider text-white">
+                    Cloud Backup (Telegram Sync)
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Automatically dispatch daily encrypted system snapshots to your personal Telegram account.
+                  </p>
+                </div>
+              </div>
+
+              {/* Status Badge & Auto-Sync Toggle */}
+              <div className="flex items-center gap-3 sm:gap-4 flex-wrap self-start lg:self-center">
+                {telegramConfig.verified ? (
+                  <span className="px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5 flex-shrink-0">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400" />
+                    <span>Active & Verified</span>
+                  </span>
+                ) : (
+                  <span className="px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1.5 flex-shrink-0">
+                    <AlertTriangle className="w-4 h-4 text-amber-400" />
+                    <span>Unverified Destination</span>
+                  </span>
+                )}
+
+                {/* Toggle Enable Auto-Sync */}
+                {telegramConfig.verified && (
+                  <div className="flex items-center gap-2.5 bg-[#121721] px-3.5 py-1.5 rounded-xl border border-[#222B3D] flex-shrink-0">
+                    <span className="text-xs font-bold text-slate-300">Daily Automated Backup</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={telegramConfig.enabled}
+                      onClick={handleToggleAutoSync}
+                      disabled={!isOwner}
+                      className={`relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                        telegramConfig.enabled ? 'bg-sky-500' : 'bg-slate-700'
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                          telegramConfig.enabled ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Telegram Message Feedback */}
+            {telegramMsg.text && (
+              <div
+                className={`p-4 rounded-xl border text-sm flex items-center gap-2.5 ${
+                  telegramMsg.type === 'error'
+                    ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                    : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                }`}
+              >
+                {telegramMsg.type === 'error' ? (
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                ) : (
+                  <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+                )}
+                <span>{telegramMsg.text}</span>
+              </div>
+            )}
+
+            {/* ── STATE B: VERIFIED & CONNECTED ───────────────────────────── */}
+            {telegramConfig.verified ? (
+              <div className="space-y-6 animate-in fade-in duration-200">
+                {/* Verified Destination Badge / Info */}
+                <div className="p-4 bg-[#121721] border border-emerald-500/30 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-emerald-500/10 rounded-xl text-emerald-400 border border-emerald-500/20 flex-shrink-0">
+                      <ShieldCheck className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs font-bold text-slate-300 uppercase tracking-wider">
+                          Verified Destination:
+                        </span>
+                        <span className="font-mono text-xs font-bold text-emerald-400 px-2.5 py-0.5 bg-[#0B0F17] rounded-lg border border-emerald-500/30">
+                          {telegramConfig.chatId}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Encrypted system archives are securely routed to this personal Telegram account.
+                        {telegramConfig.lastSentDate ? (
+                          <span className="block text-slate-400 mt-0.5">
+                            Last snapshot dispatched: <strong className="text-slate-300 font-mono">{formatDateTime(telegramConfig.lastSentDate)}</strong>
+                          </span>
+                        ) : null}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleOpenOfficialBot}
+                      className="py-1.5 px-3 bg-[#1e293b] hover:bg-[#283548] border border-slate-700 hover:border-sky-500/50 text-slate-300 hover:text-white text-xs font-semibold rounded-lg transition-colors flex items-center gap-1.5"
+                    >
+                      <Send className="w-3.5 h-3.5 rotate-[-20deg] text-sky-400" />
+                      <span>Bot Chat</span>
+                      <ExternalLink className="w-3 h-3 opacity-60" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* State B Action Buttons */}
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-1">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={handleTestTelegramBackup}
+                      disabled={!isOwner || isTestingTelegram}
+                      className="py-2.5 px-5 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white font-bold text-xs rounded-xl shadow-lg shadow-sky-600/20 active:scale-[0.99] transition-all flex items-center justify-center gap-2"
+                    >
+                      {isTestingTelegram ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-white" />
+                          <span>Compressing & Uploading Snapshot...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-4 h-4 rotate-[-20deg]" />
+                          <span>Send Test Backup Now</span>
+                        </>
+                      )}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleDisconnectTelegram}
+                      disabled={!isOwner || isDisconnecting}
+                      className="py-2.5 px-4 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 hover:border-red-500/50 text-red-400 font-bold text-xs rounded-xl active:scale-[0.99] transition-all flex items-center justify-center gap-2"
+                    >
+                      {isDisconnecting ? (
+                        <>
+                          <Loader2 className="w-4 h-4 animate-spin text-red-400" />
+                          <span>Disconnecting...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Unlink className="w-4 h-4" />
+                          <span>Disconnect / Change Account</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                    className="py-2.5 px-4 bg-slate-800/40 hover:bg-slate-800/70 border border-slate-700/50 text-slate-300 hover:text-white font-semibold text-xs rounded-xl transition-all flex items-center justify-center gap-2"
+                  >
+                    <Key className="w-4 h-4 text-sky-400" />
+                    <span>Advanced Options</span>
+                    {showAdvancedOptions ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              /* ── STATE A: UNLINKED / UNVERIFIED ───────────────────────── */
+              <div className="space-y-6 animate-in fade-in duration-200">
+                {/* 2-Step Configuration Grid */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {/* Step 1: Start Official Bot */}
+                  <div className="p-4 bg-[#121721] rounded-xl border border-[#222B3D] flex flex-col justify-between space-y-3">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 text-xs font-black flex items-center justify-center border border-sky-500/30 flex-shrink-0">
+                          1
+                        </span>
+                        <span className="text-xs font-bold text-white uppercase tracking-wider">Step 1: Start Official Bot</span>
+                      </div>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Click to open Telegram, then tap 'Start' to activate communication.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleOpenOfficialBot}
+                      className="w-full py-2.5 px-4 bg-[#1e293b] hover:bg-[#283548] border border-sky-500/30 hover:border-sky-500 text-sky-400 hover:text-white font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2"
+                    >
+                      <Send className="w-4 h-4 rotate-[-20deg]" />
+                      <span>Open Official Bot (@AlphaSupportingBot)</span>
+                      <ExternalLink className="w-3.5 h-3.5 opacity-70" />
+                    </button>
+                  </div>
+
+                  {/* Step 2: Enter Account Link Code (Chat ID) */}
+                  <div className="p-4 bg-[#121721] rounded-xl border border-[#222B3D] flex flex-col justify-between space-y-3">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 text-xs font-black flex items-center justify-center border border-sky-500/30 flex-shrink-0">
+                          2
+                        </span>
+                        <label htmlFor="telegram-chat-id" className="text-xs font-bold text-white uppercase tracking-wider">
+                          Step 2: Enter Account Link Code (Chat ID)
+                        </label>
+                      </div>
+                      <p className="text-xs text-slate-400 leading-relaxed">
+                        Paste the numeric Chat ID returned by the bot after tapping Start.
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        id="telegram-chat-id"
+                        type="text"
+                        value={telegramConfig.chatId}
+                        onChange={(e) => setTelegramConfig(prev => ({ ...prev, chatId: e.target.value }))}
+                        placeholder="e.g. 1478770811"
+                        disabled={otpSent}
+                        className="flex-1 px-4 py-2.5 bg-[#0B0F17] border border-[#222B3D] focus:border-sky-500 disabled:opacity-60 rounded-xl text-white text-xs font-mono placeholder:text-slate-600 transition-colors focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSendVerificationCode}
+                        disabled={!isOwner || isSendingCode || !telegramConfig.chatId?.trim()}
+                        className="py-2.5 px-4 bg-sky-600 hover:bg-sky-500 disabled:opacity-40 text-white font-bold text-xs rounded-xl shadow-lg shadow-sky-600/20 transition-all flex items-center justify-center gap-1.5 whitespace-nowrap"
+                      >
+                        {isSendingCode ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Sending...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Send className="w-3.5 h-3.5 rotate-[-20deg]" />
+                            <span>{otpSent ? 'Resend Code' : 'Send Verification Code'}</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* OTP Confirmation Box (State A, Step 3) */}
+                {otpSent && (
+                  <div className="p-5 bg-[#0B0F17] border border-sky-500/40 rounded-xl space-y-4 animate-in fade-in duration-200">
+                    <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-[#1E293B]">
+                      <div className="flex items-center gap-2">
+                        <ShieldCheck className="w-4 h-4 text-sky-400" />
+                        <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                          OTP Handshake Verification
+                        </h4>
+                      </div>
+                      <span className="text-[11px] text-amber-400 font-medium">Valid for 5 minutes</span>
+                    </div>
+
+                    <p className="text-xs text-slate-300">
+                      A 6-digit code was sent to your Telegram. Enter it below:
+                    </p>
+
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                      <input
+                        type="text"
+                        maxLength={6}
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                        placeholder="123456"
+                        className="px-4 py-2.5 bg-[#121721] border border-sky-500/50 focus:border-sky-400 rounded-xl text-white text-center text-lg font-mono tracking-widest placeholder:text-slate-600 transition-colors focus:outline-none w-full sm:w-44"
+                      />
+
+                      <button
+                        type="button"
+                        onClick={handleConfirmVerificationCode}
+                        disabled={!isOwner || isConfirmingCode || otpCode.trim().length !== 6}
+                        className="py-2.5 px-6 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white font-bold text-xs rounded-xl shadow-lg shadow-emerald-600/20 active:scale-[0.99] transition-all flex items-center justify-center gap-2"
+                      >
+                        {isConfirmingCode ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Confirming...</span>
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>Confirm & Connect</span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => { setOtpSent(false); setOtpCode(''); }}
+                        className="text-xs text-slate-400 hover:text-white transition-colors py-2 px-3 text-center sm:text-left"
+                      >
+                        Change Chat ID
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* State A Advanced Options Toggle */}
+                <div className="flex justify-end pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
+                    className="py-2 px-4 bg-slate-800/40 hover:bg-slate-800/70 border border-slate-700/50 text-slate-300 hover:text-white font-semibold text-xs rounded-xl transition-all flex items-center justify-center gap-2"
+                  >
+                    <Key className="w-4 h-4 text-sky-400" />
+                    <span>Advanced Options (Custom Bot Token)</span>
+                    {showAdvancedOptions ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Advanced Settings (Collapsible) */}
+            {showAdvancedOptions && (
+              <div className="p-5 bg-[#0B0F17] rounded-xl border border-slate-700/50 space-y-4 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between pb-3 border-b border-[#1E293B]">
+                  <div className="flex items-center gap-2">
+                    <Key className="w-4 h-4 text-sky-400 flex-shrink-0" />
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Advanced Options (Custom Bot Token)
+                    </h4>
+                  </div>
+                  <span className="text-[10px] text-slate-400">Optional • Default is Official Alpha Gym Bot</span>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-medium text-slate-300 flex items-center justify-between">
+                    <span>Custom Telegram Bot Token</span>
+                    <span className="text-[10px] text-slate-500 font-mono">from @BotFather</span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showBotToken ? 'text' : 'password'}
+                      value={telegramConfig.botToken}
+                      onChange={(e) => setTelegramConfig(prev => ({ ...prev, botToken: e.target.value }))}
+                      placeholder="Leave blank to use official bot, or enter custom token (e.g. 123456789:ABCdef...)"
+                      className="w-full pl-4 pr-10 py-2.5 bg-[#121721] border border-[#222B3D] focus:border-sky-500 rounded-xl text-white text-xs font-mono placeholder:text-slate-600 transition-colors focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowBotToken(!showBotToken)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
+                    >
+                      {showBotToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Leave blank to use the official Alpha Gym Bot (<strong className="text-sky-400">@AlphaSupportingBot</strong>).
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleSaveTelegramConfig}
+                      disabled={!isOwner || isSavingTelegram}
+                      className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 self-end sm:self-auto"
+                    >
+                      {isSavingTelegram ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                      <span>Save Custom Token</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

@@ -1,5 +1,28 @@
 export const CHANGELOG_DATA = [
   {
+    version: "1.0.14",
+    releaseDate: "September 2026",
+    title: "Official Telegram Cloud Sync & 6-Digit OTP Handshake",
+    categories: [
+      {
+        name: "Cloud Backup & Security",
+        items: [
+          "Official Telegram Bot integration (@AlphaSupportingBot) for streamlined, zero-configuration cloud snapshots.",
+          "Two-step OTP handshake verification: destination Chat IDs must confirm a 6-digit one-time code before cloud backups are authorized.",
+          "Automated daily cloud dispatch: silently dispatches daily encrypted SQLite database, athlete photos, and configurations to verified Telegram accounts."
+        ]
+      },
+      {
+        name: "UI & Experience",
+        items: [
+          "Modern 3-state Telegram Cloud Sync card with one-click bot launcher, OTP verification box, and live connection status badges.",
+          "Disconnect & re-link controls to safely update or migrate destination accounts.",
+          "Collapsible advanced options allowing custom bot tokens when preferred."
+        ]
+      }
+    ]
+  },
+  {
     version: "1.0.13",
     releaseDate: "September 2026",
     title: "Full Backup Archive, Auto-Snapshots & Financial Void Engine",

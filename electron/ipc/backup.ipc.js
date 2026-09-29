@@ -1,6 +1,15 @@
-const { ipcMain, dialog, app } = require('electron');
+const { ipcMain, dialog, app, shell } = require('electron');
 const fs = require('fs');
 const path = require('path');
+
+const OFFICIAL_BOT_TOKEN = '8844802967:AAGgJF2dEbynLiiv14xvwGe5-vbG9yFoAe8';
+const OFFICIAL_BOT_USERNAME = 'AlphaSupportingBot';
+
+let pendingVerification = {
+  chatId: null,
+  code: null,
+  expiresAt: 0
+};
 const Database = require('better-sqlite3');
 const AdmZip = require('adm-zip');
 const db = require('../db');
@@ -83,7 +92,7 @@ async function createBackupArchive(targetZipPath) {
 
     const manifest = {
       app: 'Alpha Gym',
-      version: app.getVersion() || '1.0.12',
+      version: app.getVersion() || '1.0.14',
       createdAt: new Date().toISOString(),
       timestamp: Date.now(),
       totalMembers,
@@ -250,6 +259,74 @@ async function restoreBackupArchive(zipFilePath) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
+// TELEGRAM CLOUD BACKUP ENGINE
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function sendBackupToTelegram(zipFilePath, botToken, chatId, metadata = {}) {
+  // Verification guard: Ensure destination is verified
+  try {
+    const verifiedRow = db.prepare(`SELECT value FROM settings WHERE key = 'telegram_verified'`).get();
+    if (!verifiedRow || verifiedRow.value !== '1') {
+      throw new Error('Telegram account is not verified. Please complete verification in Settings.');
+    }
+  } catch (err) {
+    if (err.message && err.message.includes('not verified')) {
+      throw err;
+    }
+  }
+
+  const effectiveToken = (botToken && String(botToken).trim()) ? String(botToken).trim() : OFFICIAL_BOT_TOKEN;
+  const cleanChatId = chatId ? String(chatId).trim() : '';
+
+  if (!cleanChatId) {
+    throw new Error('Account Link Code (Chat ID) is required.');
+  }
+  if (!fs.existsSync(zipFilePath)) {
+    throw new Error('Backup archive file not found: ' + zipFilePath);
+  }
+
+  const fileStats = fs.statSync(zipFilePath);
+  const sizeMB = (fileStats.size / (1024 * 1024)).toFixed(2);
+  const fileName = path.basename(zipFilePath);
+
+  const fileBuffer = fs.readFileSync(zipFilePath);
+  const blob = new Blob([fileBuffer], { type: 'application/zip' });
+
+  const caption = [
+    `🏋️ *Alpha Gym - Cloud Backup*`,
+    `🏢 *System:* Alpha Gym Desktop v${metadata.appVersion || '1.0.14'}`,
+    `📅 *Timestamp:* ${new Date().toISOString().replace('T', ' ').substring(0, 19)} UTC`,
+    `📦 *Archive Size:* ${sizeMB} MB`,
+    metadata.totalMembers ? `👥 *Total Active Members:* ${metadata.totalMembers}` : '',
+    `🔒 _Encrypted backup containing SQLite database, athlete photos, and configurations._`
+  ].filter(Boolean).join('\n');
+
+  const formData = new FormData();
+  formData.append('chat_id', cleanChatId);
+  formData.append('document', blob, fileName);
+  formData.append('caption', caption);
+  formData.append('parse_mode', 'Markdown');
+
+  const response = await fetch(`https://api.telegram.org/bot${effectiveToken}/sendDocument`, {
+    method: 'POST',
+    body: formData
+  });
+
+  const result = await response.json();
+  if (!result.ok) {
+    if (result.error_code === 401) {
+      throw new Error('Invalid Bot Token. Please verify credentials.');
+    }
+    if (result.error_code === 400 && result.description && result.description.toLowerCase().includes('chat not found')) {
+      throw new Error("Unable to send backup: Please open @AlphaSupportingBot on Telegram and tap 'Start' first.");
+    }
+    throw new Error(result.description || 'Failed to dispatch backup archive to Telegram.');
+  }
+
+  return { success: true, messageId: result.result?.message_id, sizeMB };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 // AUTOMATED DAILY ROLLING SNAPSHOTS (LAST 7 DAYS)
 // ══════════════════════════════════════════════════════════════════════════════
 
@@ -286,6 +363,43 @@ async function runAutoDailyBackup() {
           console.log(`[AutoBackup] Pruned older backup: ${files[i].name}`);
         } catch (e) {}
       }
+    }
+
+    // Silent Daily Auto-Dispatch Hook to Telegram
+    try {
+      const tgRows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id', 'telegram_backup_enabled', 'telegram_last_sent_date', 'telegram_verified')`).all();
+      const tgConfig = {};
+      for (const r of tgRows) tgConfig[r.key] = r.value;
+
+      const isTgEnabled = tgConfig['telegram_backup_enabled'] === '1';
+      const isVerified = tgConfig['telegram_verified'] === '1';
+      const customBotToken = (tgConfig['telegram_bot_token'] || '').trim();
+      const chatId = (tgConfig['telegram_chat_id'] || '').trim();
+      const lastSent = tgConfig['telegram_last_sent_date'] || '';
+      const effectiveToken = customBotToken || OFFICIAL_BOT_TOKEN;
+
+      if (isTgEnabled && isVerified && chatId && effectiveToken) {
+        const alreadySentToday = lastSent && lastSent.startsWith(todayStr);
+        if (!alreadySentToday && fs.existsSync(todayBackupFile)) {
+          console.log('[AutoBackup] Silently dispatching daily backup to Telegram...');
+          let totalMembers = 0;
+          try {
+            const countRow = db.prepare('SELECT COUNT(*) as c FROM clients').get();
+            totalMembers = countRow ? countRow.c : 0;
+          } catch (e) {}
+
+          await sendBackupToTelegram(todayBackupFile, effectiveToken, chatId, {
+            totalMembers,
+            appVersion: app.getVersion() || '1.0.14'
+          });
+
+          const nowIso = new Date().toISOString();
+          db.prepare(`INSERT INTO settings (key, value) VALUES ('telegram_last_sent_date', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(nowIso);
+          console.log('[AutoBackup] Daily backup successfully sent to Telegram.');
+        }
+      }
+    } catch (tgErr) {
+      console.warn('[AutoBackup] Silent Telegram backup warning:', tgErr.message);
     }
   } catch (err) {
     console.error('[AutoBackup] Error executing auto snapshot:', err.message);
@@ -464,6 +578,238 @@ ipcMain.handle('backup:getBackupInfo', async (event, filePath) => {
     return { success: true, manifest: null };
   } catch (err) {
     return { error: err.message };
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// TELEGRAM CLOUD SYNC IPC HANDLERS
+// ──────────────────────────────────────────────────────────────────────────────
+
+ipcMain.handle('backup:getTelegramConfig', async () => {
+  try {
+    const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id', 'telegram_backup_enabled', 'telegram_last_sent_date', 'telegram_verified')`).all();
+    const configMap = {};
+    for (const r of rows) configMap[r.key] = r.value;
+    return {
+      success: true,
+      botToken: configMap['telegram_bot_token'] || '',
+      chatId: configMap['telegram_chat_id'] || '',
+      enabled: configMap['telegram_backup_enabled'] === '1',
+      verified: configMap['telegram_verified'] === '1',
+      lastSentDate: configMap['telegram_last_sent_date'] || null,
+      officialBotUsername: OFFICIAL_BOT_USERNAME
+    };
+  } catch (err) {
+    console.error('[backup:getTelegramConfig] Error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('backup:saveTelegramConfig', async (_event, config = {}) => {
+  try {
+    const { botToken, chatId, enabled } = config;
+    const upsert = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+    const saveAll = db.transaction(() => {
+      if (botToken !== undefined) upsert.run('telegram_bot_token', String(botToken).trim());
+      if (chatId !== undefined) upsert.run('telegram_chat_id', String(chatId).trim());
+      if (enabled !== undefined) upsert.run('telegram_backup_enabled', enabled ? '1' : '0');
+    });
+    saveAll();
+    return { success: true };
+  } catch (err) {
+    console.error('[backup:saveTelegramConfig] Error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('backup:sendVerificationCode', async (_event, chatId) => {
+  try {
+    const cleanChatId = chatId ? String(chatId).trim() : '';
+    if (!cleanChatId) {
+      return { success: false, error: 'Please enter your Account Link Code (Chat ID) first.' };
+    }
+
+    // Generate random 6-digit numeric OTP
+    const generatedCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+    // Cache verification for 5 minutes
+    pendingVerification = {
+      chatId: cleanChatId,
+      code: generatedCode,
+      expiresAt: Date.now() + 5 * 60 * 1000
+    };
+
+    const messageText = [
+      `🔐 *Alpha Gym Desktop Verification*`,
+      ``,
+      `Your 6-digit confirmation code is:`,
+      `*${generatedCode}*`,
+      ``,
+      `_Enter this code in your Alpha Gym Settings to verify your backup destination. This code expires in 5 minutes._`
+    ].join('\n');
+
+    const response = await fetch(`https://api.telegram.org/bot${OFFICIAL_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        chat_id: cleanChatId,
+        text: messageText,
+        parse_mode: 'Markdown'
+      })
+    });
+
+    const result = await response.json();
+    if (!result.ok) {
+      if (result.error_code === 400 && result.description && result.description.toLowerCase().includes('chat not found')) {
+        return {
+          success: false,
+          error: "Unable to send code: Please open @AlphaSupportingBot on Telegram and tap 'Start' first."
+        };
+      }
+      if (result.error_code === 401) {
+        return { success: false, error: 'Invalid Bot Token. Please verify credentials.' };
+      }
+      return { success: false, error: result.description || 'Failed to dispatch verification code.' };
+    }
+
+    return { success: true };
+  } catch (err) {
+    console.error('[backup:sendVerificationCode] Error:', err);
+    return { success: false, error: err.message || 'Network error while contacting Telegram.' };
+  }
+});
+
+ipcMain.handle('backup:confirmVerificationCode', async (_event, inputCode) => {
+  try {
+    const cleanCode = inputCode ? String(inputCode).trim() : '';
+    if (!cleanCode) {
+      return { success: false, error: 'Please enter the 6-digit verification code.' };
+    }
+
+    if (!pendingVerification.code || Date.now() >= pendingVerification.expiresAt) {
+      return { success: false, error: 'Invalid or expired verification code. Please request a new code.' };
+    }
+
+    if (cleanCode !== pendingVerification.code) {
+      return { success: false, error: 'Invalid verification code. Please check and try again.' };
+    }
+
+    const verifiedChatId = pendingVerification.chatId;
+    const upsert = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+    const saveTx = db.transaction(() => {
+      upsert.run('telegram_chat_id', verifiedChatId);
+      upsert.run('telegram_verified', '1');
+      upsert.run('telegram_backup_enabled', '1');
+    });
+    saveTx();
+
+    pendingVerification = {
+      chatId: null,
+      code: null,
+      expiresAt: 0
+    };
+
+    return { success: true, chatId: verifiedChatId };
+  } catch (err) {
+    console.error('[backup:confirmVerificationCode] Error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('backup:disconnectTelegram', async () => {
+  try {
+    const upsert = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+    const disconnectTx = db.transaction(() => {
+      upsert.run('telegram_verified', '0');
+      upsert.run('telegram_backup_enabled', '0');
+    });
+    disconnectTx();
+
+    pendingVerification = {
+      chatId: null,
+      code: null,
+      expiresAt: 0
+    };
+
+    return { success: true };
+  } catch (err) {
+    console.error('[backup:disconnectTelegram] Error:', err);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('backup:testTelegram', async (_event, data = {}) => {
+  let tempZipPath = null;
+  try {
+    let botToken = (data.botToken || '').trim();
+    let chatId = (data.chatId || '').trim();
+
+    const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id', 'telegram_verified')`).all();
+    const configMap = {};
+    for (const r of rows) configMap[r.key] = r.value;
+
+    if (!botToken) botToken = (configMap['telegram_bot_token'] || '').trim();
+    if (!chatId) chatId = (configMap['telegram_chat_id'] || '').trim();
+
+    if (configMap['telegram_verified'] !== '1') {
+      return { success: false, error: 'Telegram account is not verified. Please complete verification in Settings.' };
+    }
+
+    if (!chatId) {
+      return { success: false, error: 'Account Link Code (Chat ID) is required. Please enter your Chat ID.' };
+    }
+
+    const effectiveToken = botToken || OFFICIAL_BOT_TOKEN;
+
+    const userData = app.getPath('userData');
+    const tempDir = path.join(userData, 'temp_tg_test');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    tempZipPath = path.join(tempDir, `AlphaGym_Backup_Test_${Date.now()}.zip`);
+    const archiveResult = await createBackupArchive(tempZipPath);
+
+    let totalMembers = 0;
+    try {
+      const countRow = db.prepare('SELECT COUNT(*) as c FROM clients').get();
+      totalMembers = countRow ? countRow.c : 0;
+    } catch (e) {}
+
+    await sendBackupToTelegram(tempZipPath, effectiveToken, chatId, {
+      totalMembers,
+      appVersion: app.getVersion() || '1.0.14'
+    });
+
+    const nowIso = new Date().toISOString();
+    db.prepare(`INSERT INTO settings (key, value) VALUES ('telegram_last_sent_date', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(nowIso);
+
+    return {
+      success: true,
+      sizeMB: archiveResult.sizeMB,
+      lastSentDate: nowIso
+    };
+  } catch (err) {
+    console.error('[backup:testTelegram] Error:', err);
+    return { success: false, error: err.message };
+  } finally {
+    if (tempZipPath && fs.existsSync(tempZipPath)) {
+      try { fs.unlinkSync(tempZipPath); } catch (e) {}
+    }
+  }
+});
+
+ipcMain.handle('system:openExternal', async (_event, url) => {
+  try {
+    if (typeof url === 'string' && (url.startsWith('https://') || url.startsWith('http://'))) {
+      await shell.openExternal(url);
+      return { success: true };
+    }
+    return { success: false, error: 'Invalid URL format' };
+  } catch (err) {
+    return { success: false, error: err.message };
   }
 });
 

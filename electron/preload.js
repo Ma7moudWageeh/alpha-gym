@@ -112,6 +112,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportJson: (args) => ipcRenderer.invoke('backup:exportJson', args),
     importJson: (args) => ipcRenderer.invoke('backup:importJson', args),
     factoryReset: (args) => ipcRenderer.invoke('backup:factoryReset', args),
+    getTelegramConfig: () => ipcRenderer.invoke('backup:getTelegramConfig'),
+    saveTelegramConfig: (config) => ipcRenderer.invoke('backup:saveTelegramConfig', config),
+    testTelegram: (data) => ipcRenderer.invoke('backup:testTelegram', data),
+    sendVerificationCode: (chatId) => ipcRenderer.invoke('backup:sendVerificationCode', chatId),
+    confirmVerificationCode: (code) => ipcRenderer.invoke('backup:confirmVerificationCode', code),
+    disconnectTelegram: () => ipcRenderer.invoke('backup:disconnectTelegram'),
   },
   print: {
     receipt: (args) => ipcRenderer.invoke('print:receipt', args),
@@ -149,5 +155,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   settings: {
     getWhatsAppTemplates: () => ipcRenderer.invoke('settings:getWhatsAppTemplates'),
     saveWhatsAppTemplates: (templates) => ipcRenderer.invoke('settings:saveWhatsAppTemplates', templates),
+  },
+  system: {
+    openExternal: (url) => ipcRenderer.invoke('system:openExternal', url),
   },
 });

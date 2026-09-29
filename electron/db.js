@@ -66,6 +66,23 @@ try {
 
   ensureSchemaIntegrity(db);
 
+  // Ensure settings table supports dynamic Telegram settings with clean defaults
+  try {
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL DEFAULT ''
+      )
+    `).run();
+
+    const seedTgSetting = db.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`);
+    seedTgSetting.run('telegram_bot_token', '');
+    seedTgSetting.run('telegram_chat_id', '');
+    seedTgSetting.run('telegram_backup_enabled', '0');
+    seedTgSetting.run('telegram_last_sent_date', '');
+    seedTgSetting.run('telegram_verified', '0');
+  } catch (e) {}
+
   try {
     db.prepare(`
       CREATE VIEW IF NOT EXISTS plans AS 

@@ -3,6 +3,7 @@ const { ipcMain, shell } = require('electron');
 const ALLOWED_PREFIXES = [
   'https://wa.me/',
   'https://web.whatsapp.com/',
+  'https://t.me/',
 ];
 
 ipcMain.handle('shell:openExternal', async (_event, url) => {

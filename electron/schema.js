@@ -127,8 +127,18 @@ function initSchema(dbInstance = db) {
 
   // Seed WhatsApp template keys with empty strings if not present
   const waKeys = ['wa_template_birthday', 'wa_template_expiring', 'wa_template_expired', 'wa_template_welcome'];
-  const seedSetting = target.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, '')`);
-  for (const key of waKeys) seedSetting.run(key);
+  const seedSetting = target.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)`);
+  for (const key of waKeys) seedSetting.run(key, '');
+
+  // Seed dynamic Telegram backup settings with clean defaults (no hardcoded credentials)
+  const tgKeys = [
+    { key: 'telegram_bot_token', default: '' },
+    { key: 'telegram_chat_id', default: '' },
+    { key: 'telegram_backup_enabled', default: '0' },
+    { key: 'telegram_last_sent_date', default: '' },
+    { key: 'telegram_verified', default: '0' }
+  ];
+  for (const tg of tgKeys) seedSetting.run(tg.key, tg.default);
 
   // Clean up any legacy licensing/activation keys from settings table
   try {

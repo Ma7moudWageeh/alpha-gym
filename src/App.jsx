@@ -87,6 +87,16 @@ const AppEntry = () => {
 };
 
 function App() {
+  useEffect(() => {
+    const handleOnline = () => {
+      if (window.electronAPI?.backup?.retryPendingSync) {
+        window.electronAPI.backup.retryPendingSync().catch(() => {});
+      }
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
+  }, []);
+
   return (
     <>
       <UpdateNotification />

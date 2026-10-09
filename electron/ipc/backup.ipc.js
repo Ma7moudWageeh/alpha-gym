@@ -92,7 +92,7 @@ async function createBackupArchive(targetZipPath) {
 
     const manifest = {
       app: 'Alpha Gym',
-      version: app.getVersion() || '1.0.14',
+      version: app.getVersion() || '1.0.15',
       createdAt: new Date().toISOString(),
       timestamp: Date.now(),
       totalMembers,
@@ -275,7 +275,7 @@ async function sendBackupToTelegram(zipFilePath, botToken, chatId, metadata = {}
     }
   }
 
-  const effectiveToken = (botToken && String(botToken).trim()) ? String(botToken).trim() : OFFICIAL_BOT_TOKEN;
+  const effectiveToken = OFFICIAL_BOT_TOKEN;
   const cleanChatId = chatId ? String(chatId).trim() : '';
 
   if (!cleanChatId) {
@@ -294,7 +294,7 @@ async function sendBackupToTelegram(zipFilePath, botToken, chatId, metadata = {}
 
   const caption = [
     `🏋️ *Alpha Gym - Cloud Backup*`,
-    `🏢 *System:* Alpha Gym Desktop v${metadata.appVersion || '1.0.14'}`,
+    `🏢 *System:* Alpha Gym Desktop v${metadata.appVersion || '1.0.15'}`,
     `📅 *Timestamp:* ${new Date().toISOString().replace('T', ' ').substring(0, 19)} UTC`,
     `📦 *Archive Size:* ${sizeMB} MB`,
     metadata.totalMembers ? `👥 *Total Active Members:* ${metadata.totalMembers}` : '',
@@ -327,8 +327,19 @@ async function sendBackupToTelegram(zipFilePath, botToken, chatId, metadata = {}
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// AUTOMATED DAILY ROLLING SNAPSHOTS (LAST 7 DAYS)
+// AUTOMATED DAILY ROLLING SNAPSHOTS (24-HOUR CYCLE & OFFLINE PENDING QUEUE)
 // ══════════════════════════════════════════════════════════════════════════════
+
+function getTelegramConfigMap() {
+  try {
+    const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('telegram_chat_id', 'telegram_backup_enabled', 'telegram_last_sent_date', 'telegram_verified', 'telegram_pending_sync', 'last_telegram_backup_time', 'last_local_backup_timestamp')`).all();
+    const configMap = {};
+    for (const r of rows) configMap[r.key] = r.value;
+    return configMap;
+  } catch (e) {
+    return {};
+  }
+}
 
 async function runAutoDailyBackup() {
   try {
@@ -338,78 +349,184 @@ async function runAutoDailyBackup() {
       fs.mkdirSync(autoBackupsDir, { recursive: true });
     }
 
+    const tgConfig = getTelegramConfigMap();
+    const lastLocalTs = tgConfig['last_local_backup_timestamp'] ? parseInt(tgConfig['last_local_backup_timestamp'], 10) : 0;
+    const now = Date.now();
     const todayStr = new Date().toISOString().split('T')[0];
     const todayBackupFile = path.join(autoBackupsDir, `auto_backup_${todayStr}.zip`);
 
-    if (!fs.existsSync(todayBackupFile)) {
-      console.log(`[AutoBackup] Generating daily rolling snapshot: auto_backup_${todayStr}.zip`);
+    // Automated daily backups trigger every 24 hours locally regardless of internet connection
+    const is24HoursPassed = (now - lastLocalTs) >= (24 * 60 * 60 * 1000);
+    const shouldCreateSnapshot = !fs.existsSync(todayBackupFile) || is24HoursPassed;
+
+    if (shouldCreateSnapshot) {
+      console.log(`[AutoBackup] Generating 24-hour local snapshot: auto_backup_${todayStr}.zip`);
       await createBackupArchive(todayBackupFile);
+
+      db.prepare(`INSERT INTO settings (key, value) VALUES ('last_local_backup_timestamp', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(now));
+      console.log(`[AutoBackup] Local snapshot saved successfully at ${todayBackupFile}`);
     }
 
-    // Retain strictly the last 7 daily snapshots
-    const files = fs.readdirSync(autoBackupsDir)
-      .filter(f => f.startsWith('auto_backup_') && f.endsWith('.zip'))
-      .map(f => ({
-        name: f,
-        fullPath: path.join(autoBackupsDir, f),
-        time: fs.statSync(path.join(autoBackupsDir, f)).mtimeMs
-      }))
-      .sort((a, b) => b.time - a.time);
-
-    if (files.length > 7) {
-      for (let i = 7; i < files.length; i++) {
-        try {
-          fs.unlinkSync(files[i].fullPath);
-          console.log(`[AutoBackup] Pruned older backup: ${files[i].name}`);
-        } catch (e) {}
-      }
-    }
-
-    // Silent Daily Auto-Dispatch Hook to Telegram
+    // Retain strictly the last 7 daily snapshots to prevent disk bloat
     try {
-      const tgRows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id', 'telegram_backup_enabled', 'telegram_last_sent_date', 'telegram_verified')`).all();
-      const tgConfig = {};
-      for (const r of tgRows) tgConfig[r.key] = r.value;
+      const files = fs.readdirSync(autoBackupsDir)
+        .filter(f => f.startsWith('auto_backup_') && f.endsWith('.zip'))
+        .map(f => ({
+          name: f,
+          fullPath: path.join(autoBackupsDir, f),
+          time: fs.statSync(path.join(autoBackupsDir, f)).mtimeMs
+        }))
+        .sort((a, b) => b.time - a.time);
 
-      const isTgEnabled = tgConfig['telegram_backup_enabled'] === '1';
-      const isVerified = tgConfig['telegram_verified'] === '1';
-      const customBotToken = (tgConfig['telegram_bot_token'] || '').trim();
-      const chatId = (tgConfig['telegram_chat_id'] || '').trim();
-      const lastSent = tgConfig['telegram_last_sent_date'] || '';
-      const effectiveToken = customBotToken || OFFICIAL_BOT_TOKEN;
-
-      if (isTgEnabled && isVerified && chatId && effectiveToken) {
-        const alreadySentToday = lastSent && lastSent.startsWith(todayStr);
-        if (!alreadySentToday && fs.existsSync(todayBackupFile)) {
-          console.log('[AutoBackup] Silently dispatching daily backup to Telegram...');
-          let totalMembers = 0;
+      if (files.length > 7) {
+        for (let i = 7; i < files.length; i++) {
           try {
-            const countRow = db.prepare('SELECT COUNT(*) as c FROM clients').get();
-            totalMembers = countRow ? countRow.c : 0;
+            fs.unlinkSync(files[i].fullPath);
+            console.log(`[AutoBackup] Pruned older backup: ${files[i].name}`);
           } catch (e) {}
+        }
+      }
+    } catch (pruneErr) {
+      console.warn('[AutoBackup] Prune warning:', pruneErr.message);
+    }
 
+    // Telegram Cloud Auto-Dispatch & Offline Pending Sync Queue
+    const isTgEnabled = tgConfig['telegram_backup_enabled'] === '1';
+    const isVerified = tgConfig['telegram_verified'] === '1';
+    const chatId = (tgConfig['telegram_chat_id'] || '').trim();
+    const lastSent = tgConfig['telegram_last_sent_date'] || '';
+    const effectiveToken = OFFICIAL_BOT_TOKEN;
+
+    if (isTgEnabled && isVerified && chatId && effectiveToken) {
+      const alreadySentToday = lastSent && lastSent.startsWith(todayStr);
+
+      if (!alreadySentToday && fs.existsSync(todayBackupFile)) {
+        console.log('[AutoBackup] Attempting silent daily dispatch to Telegram...');
+        let totalMembers = 0;
+        try {
+          const countRow = db.prepare('SELECT COUNT(*) as c FROM clients').get();
+          totalMembers = countRow ? countRow.c : 0;
+        } catch (e) {}
+
+        try {
           await sendBackupToTelegram(todayBackupFile, effectiveToken, chatId, {
             totalMembers,
-            appVersion: app.getVersion() || '1.0.14'
+            appVersion: app.getVersion() || '1.0.15'
           });
 
           const nowIso = new Date().toISOString();
-          db.prepare(`INSERT INTO settings (key, value) VALUES ('telegram_last_sent_date', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(nowIso);
+          const upsert = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+          const updateTx = db.transaction(() => {
+            upsert.run('telegram_last_sent_date', nowIso);
+            upsert.run('last_telegram_backup_time', String(now));
+            upsert.run('telegram_pending_sync', '0');
+          });
+          updateTx();
           console.log('[AutoBackup] Daily backup successfully sent to Telegram.');
+        } catch (tgErr) {
+          // If offline or network error, keep local file safe and mark as pending sync
+          console.warn('[AutoBackup] Telegram dispatch failed (offline/network error); marked pending sync:', tgErr.message);
+          db.prepare(`INSERT INTO settings (key, value) VALUES ('telegram_pending_sync', '1') ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();
         }
       }
-    } catch (tgErr) {
-      console.warn('[AutoBackup] Silent Telegram backup warning:', tgErr.message);
     }
   } catch (err) {
     console.error('[AutoBackup] Error executing auto snapshot:', err.message);
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// "LATEST ONLY" DISPATCH STRATEGY ON RECONNECTION
+// ══════════════════════════════════════════════════════════════════════════════
+
+async function syncPendingTelegramBackup() {
+  try {
+    const tgConfig = getTelegramConfigMap();
+    const isTgEnabled = tgConfig['telegram_backup_enabled'] === '1';
+    const isVerified = tgConfig['telegram_verified'] === '1';
+    const isPending = tgConfig['telegram_pending_sync'] === '1';
+    const chatId = (tgConfig['telegram_chat_id'] || '').trim();
+    const effectiveToken = OFFICIAL_BOT_TOKEN;
+
+    if (!isTgEnabled || !isVerified || !chatId || !effectiveToken) {
+      return { success: false, reason: 'Telegram sync not configured or not verified.' };
+    }
+
+    if (!isPending) {
+      return { success: true, pending: false, message: 'No pending backup to sync.' };
+    }
+
+    const userData = app.getPath('userData');
+    const autoBackupsDir = path.join(userData, 'auto_backups');
+    if (!fs.existsSync(autoBackupsDir)) {
+      return { success: false, error: 'No backup directory found.' };
+    }
+
+    const files = fs.readdirSync(autoBackupsDir)
+      .filter(f => f.endsWith('.zip'))
+      .map(f => {
+        const fullPath = path.join(autoBackupsDir, f);
+        const stats = fs.statSync(fullPath);
+        return {
+          name: f,
+          fullPath,
+          mtimeMs: stats.mtimeMs
+        };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    if (files.length === 0) {
+      db.prepare(`INSERT INTO settings (key, value) VALUES ('telegram_pending_sync', '0') ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run();
+      return { success: true, message: 'No backup archives found to sync.' };
+    }
+
+    // STRICT REQUIREMENT: Send ONLY the single newest snapshot. Ignore/skip older accumulated snapshots.
+    const newestSnapshot = files[0];
+    console.log(`[AutoBackup] Syncing ONLY most recent snapshot to Telegram: ${newestSnapshot.name} (skipping ${files.length - 1} older files)`);
+
+    let totalMembers = 0;
+    try {
+      const countRow = db.prepare('SELECT COUNT(*) as c FROM clients').get();
+      totalMembers = countRow ? countRow.c : 0;
+    } catch (e) {}
+
+    await sendBackupToTelegram(newestSnapshot.fullPath, effectiveToken, chatId, {
+      totalMembers,
+      appVersion: app.getVersion() || '1.0.15'
+    });
+
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    const upsert = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
+    const updateTx = db.transaction(() => {
+      upsert.run('telegram_last_sent_date', nowIso);
+      upsert.run('last_telegram_backup_time', String(now));
+      upsert.run('telegram_pending_sync', '0');
+    });
+    updateTx();
+
+    console.log(`[AutoBackup] Successfully synced newest snapshot (${newestSnapshot.name}) to Telegram. Pending sync cleared.`);
+    return { success: true, syncedFile: newestSnapshot.name };
+  } catch (err) {
+    console.warn('[AutoBackup] Pending sync attempt failed (still offline or network error):', err.message);
+    // Keep telegram_pending_sync = '1'
+    return { success: false, error: err.message, pending: true };
+  }
+}
+
 // Trigger daily snapshot silently 5 seconds after startup
 setTimeout(() => {
-  runAutoDailyBackup();
+  runAutoDailyBackup().then(() => {
+    syncPendingTelegramBackup().catch(() => {});
+  });
 }, 5000);
+
+// Background interval every 20 minutes to enforce 24-hour cycle and retry pending syncs
+setInterval(() => {
+  runAutoDailyBackup().then(() => {
+    syncPendingTelegramBackup().catch(() => {});
+  });
+}, 20 * 60 * 1000);
 
 // ══════════════════════════════════════════════════════════════════════════════
 // IPC HANDLERS
@@ -564,6 +681,40 @@ ipcMain.handle('backup:getAutoBackupsList', async () => {
   }
 });
 
+ipcMain.handle('backup:getBackupPath', async () => {
+  try {
+    const userData = app.getPath('userData');
+    const autoBackupsDir = path.join(userData, 'auto_backups');
+    if (!fs.existsSync(autoBackupsDir)) {
+      fs.mkdirSync(autoBackupsDir, { recursive: true });
+    }
+    return { success: true, path: autoBackupsDir };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('backup:openBackupFolder', async () => {
+  try {
+    const userData = app.getPath('userData');
+    const autoBackupsDir = path.join(userData, 'auto_backups');
+    if (!fs.existsSync(autoBackupsDir)) {
+      fs.mkdirSync(autoBackupsDir, { recursive: true });
+    }
+    const openErr = await shell.openPath(autoBackupsDir);
+    if (openErr) {
+      return { success: false, error: openErr };
+    }
+    return { success: true, path: autoBackupsDir };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('backup:retryPendingSync', async () => {
+  return await syncPendingTelegramBackup();
+});
+
 ipcMain.handle('backup:getBackupInfo', async (event, filePath) => {
   try {
     if (!filePath || !fs.existsSync(filePath)) {
@@ -587,15 +738,15 @@ ipcMain.handle('backup:getBackupInfo', async (event, filePath) => {
 
 ipcMain.handle('backup:getTelegramConfig', async () => {
   try {
-    const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id', 'telegram_backup_enabled', 'telegram_last_sent_date', 'telegram_verified')`).all();
+    const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('telegram_chat_id', 'telegram_backup_enabled', 'telegram_last_sent_date', 'telegram_verified', 'telegram_pending_sync')`).all();
     const configMap = {};
     for (const r of rows) configMap[r.key] = r.value;
     return {
       success: true,
-      botToken: configMap['telegram_bot_token'] || '',
       chatId: configMap['telegram_chat_id'] || '',
       enabled: configMap['telegram_backup_enabled'] === '1',
       verified: configMap['telegram_verified'] === '1',
+      pendingSync: configMap['telegram_pending_sync'] === '1',
       lastSentDate: configMap['telegram_last_sent_date'] || null,
       officialBotUsername: OFFICIAL_BOT_USERNAME
     };
@@ -607,10 +758,9 @@ ipcMain.handle('backup:getTelegramConfig', async () => {
 
 ipcMain.handle('backup:saveTelegramConfig', async (_event, config = {}) => {
   try {
-    const { botToken, chatId, enabled } = config;
+    const { chatId, enabled } = config;
     const upsert = db.prepare(`INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`);
     const saveAll = db.transaction(() => {
-      if (botToken !== undefined) upsert.run('telegram_bot_token', String(botToken).trim());
       if (chatId !== undefined) upsert.run('telegram_chat_id', String(chatId).trim());
       if (enabled !== undefined) upsert.run('telegram_backup_enabled', enabled ? '1' : '0');
     });
@@ -743,14 +893,12 @@ ipcMain.handle('backup:disconnectTelegram', async () => {
 ipcMain.handle('backup:testTelegram', async (_event, data = {}) => {
   let tempZipPath = null;
   try {
-    let botToken = (data.botToken || '').trim();
     let chatId = (data.chatId || '').trim();
 
-    const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('telegram_bot_token', 'telegram_chat_id', 'telegram_verified')`).all();
+    const rows = db.prepare(`SELECT key, value FROM settings WHERE key IN ('telegram_chat_id', 'telegram_verified')`).all();
     const configMap = {};
     for (const r of rows) configMap[r.key] = r.value;
 
-    if (!botToken) botToken = (configMap['telegram_bot_token'] || '').trim();
     if (!chatId) chatId = (configMap['telegram_chat_id'] || '').trim();
 
     if (configMap['telegram_verified'] !== '1') {
@@ -761,7 +909,7 @@ ipcMain.handle('backup:testTelegram', async (_event, data = {}) => {
       return { success: false, error: 'Account Link Code (Chat ID) is required. Please enter your Chat ID.' };
     }
 
-    const effectiveToken = botToken || OFFICIAL_BOT_TOKEN;
+    const effectiveToken = OFFICIAL_BOT_TOKEN;
 
     const userData = app.getPath('userData');
     const tempDir = path.join(userData, 'temp_tg_test');
@@ -780,7 +928,7 @@ ipcMain.handle('backup:testTelegram', async (_event, data = {}) => {
 
     await sendBackupToTelegram(tempZipPath, effectiveToken, chatId, {
       totalMembers,
-      appVersion: app.getVersion() || '1.0.14'
+      appVersion: app.getVersion() || '1.0.15'
     });
 
     const nowIso = new Date().toISOString();

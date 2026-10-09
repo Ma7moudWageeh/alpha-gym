@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   subscriptions: {
     create: (args) => ipcRenderer.invoke('subscriptions:create', args),
     renew: (args) => ipcRenderer.invoke('subscriptions:renew', args),
+    update: (args) => ipcRenderer.invoke('subscriptions:update', args),
     freeze: (args) => ipcRenderer.invoke('subscriptions:freeze', args),
     unfreeze: (args) => ipcRenderer.invoke('subscriptions:unfreeze', args),
     checkIn: (args) => ipcRenderer.invoke('subscriptions:checkIn', args),
@@ -112,6 +113,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     exportJson: (args) => ipcRenderer.invoke('backup:exportJson', args),
     importJson: (args) => ipcRenderer.invoke('backup:importJson', args),
     factoryReset: (args) => ipcRenderer.invoke('backup:factoryReset', args),
+    getBackupPath: () => ipcRenderer.invoke('backup:getBackupPath'),
+    openBackupFolder: () => ipcRenderer.invoke('backup:openBackupFolder'),
+    retryPendingSync: () => ipcRenderer.invoke('backup:retryPendingSync'),
     getTelegramConfig: () => ipcRenderer.invoke('backup:getTelegramConfig'),
     saveTelegramConfig: (config) => ipcRenderer.invoke('backup:saveTelegramConfig', config),
     testTelegram: (data) => ipcRenderer.invoke('backup:testTelegram', data),

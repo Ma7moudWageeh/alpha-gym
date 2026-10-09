@@ -1,18 +1,38 @@
-import React, { useState, useEffect, useContext, useMemo } from 'react';
+import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import {
   Search, Plus, Edit2, Trash2, User, X, Printer,
   ChevronRight, Calendar, AlertCircle, CheckSquare, Square,
-  Users, Activity, Snowflake, MessageCircle
+  Users, Activity, Snowflake, MessageCircle, Cake
 } from 'lucide-react';
-import { formatDateDDMMYYYY, getAvatarGlowClass, getClientEffectiveStatus, getTodayStr, addDays } from '../utils/dateFormat';
+import { formatDateDDMMYYYY, getAvatarGlowClass, getClientEffectiveStatus, getTodayStr, addDays, isClientBirthdayToday } from '../utils/dateFormat';
 import DateInput from '../components/DateInput';
 import SettleDebtModal from '../components/modals/SettleDebtModal';
 import { openClientWhatsApp } from '../utils/whatsapp';
 import { WhatsAppContextualButtons } from '../components/common/WhatsAppButton';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
+
+const CLIENTS_VIEW_STATE_KEY = 'alpha_clients_view_state';
+
+function readStoredViewState() {
+  try {
+    const raw = sessionStorage.getItem(CLIENTS_VIEW_STATE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to read clients view state from sessionStorage:', e);
+  }
+  return null;
+}
+
+function writeStoredViewState(state) {
+  try {
+    sessionStorage.setItem(CLIENTS_VIEW_STATE_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.error('Failed to write clients view state to sessionStorage:', e);
+  }
+}
 
 function calcAge(birthDate) {
   if (!birthDate) return '';
@@ -122,18 +142,167 @@ const Clients = () => {
   const [statusCounts, setStatusCounts] = useState({ all: 0, active: 0, frozen: 0, expired: 0 });
   const [packages, setPackages] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchQuery, setSearchQuery] = useState('');
-
-  const initialFilter = (location.state?.initialTab || searchParams.get('status') || 'all').toLowerCase();
+  const storedState = readStoredViewState();
+  const initialFilter = (() => {
+    if (location.state?.initialTab) return location.state.initialTab.toLowerCase();
+    if (searchParams.get('status')) return searchParams.get('status').toLowerCase();
+    if (storedState?.activeTab) return storedState.activeTab.toLowerCase();
+    return 'all';
+  })();
   const [statusFilter, setStatusFilter] = useState(initialFilter);
+
+  const initialSearch = (() => {
+    if (!location.state?.initialTab && !searchParams.get('status') && storedState?.searchQuery) {
+      return storedState.searchQuery;
+    }
+    return '';
+  })();
+  const [searchQuery, setSearchQuery] = useState(initialSearch);
+
+  const scrollRestoredRef = useRef(false);
+
+  const getScrollOffset = () => {
+    const windowTop = window.scrollY || window.pageYOffset || 0;
+    const docTop = document.documentElement ? document.documentElement.scrollTop : 0;
+    const bodyTop = document.body ? document.body.scrollTop : 0;
+    const mainEl = document.querySelector('main');
+    const mainTop = mainEl ? mainEl.scrollTop : 0;
+
+    let containerTop = 0;
+    const scrollContainers = document.querySelectorAll('.overflow-y-auto, [data-scroll-container]');
+    scrollContainers.forEach((el) => {
+      if (el.scrollTop > containerTop) {
+        containerTop = el.scrollTop;
+      }
+    });
+
+    return Math.max(windowTop, docTop, bodyTop, mainTop, containerTop);
+  };
+
+  const setScrollOffset = (offset) => {
+    if (typeof offset !== 'number' || offset <= 0) return;
+
+    window.scrollTo({ top: offset, behavior: 'instant' });
+    if (document.documentElement) {
+      document.documentElement.scrollTop = offset;
+    }
+    if (document.body) {
+      document.body.scrollTop = offset;
+    }
+
+    const mainEl = document.querySelector('main');
+    if (mainEl) {
+      mainEl.scrollTop = offset;
+    }
+
+    const scrollContainers = document.querySelectorAll('.overflow-y-auto, [data-scroll-container]');
+    scrollContainers.forEach((el) => {
+      if (el.scrollHeight > el.clientHeight) {
+        el.scrollTop = offset;
+      }
+    });
+  };
+
+  const handleOpenClient = (clientId) => {
+    const currentOffset = getScrollOffset();
+    const state = {
+      activeTab: statusFilter,
+      searchQuery: searchQuery || '',
+      scrollOffset: currentOffset,
+      shouldRestoreScroll: true,
+    };
+    writeStoredViewState(state);
+    navigate(`/clients/${clientId}`);
+  };
+
+  const setActiveTab = (tab) => {
+    const lower = tab.toLowerCase();
+    setStatusFilter(lower);
+    scrollRestoredRef.current = true;
+    setScrollOffset(0);
+    const stored = readStoredViewState() || {};
+    stored.activeTab = lower;
+    stored.scrollOffset = 0;
+    stored.shouldRestoreScroll = false;
+    writeStoredViewState(stored);
+  };
+
+  const handleSearchChange = (val) => {
+    setSearchQuery(val);
+    const stored = readStoredViewState() || {};
+    stored.searchQuery = val;
+    writeStoredViewState(stored);
+  };
 
   useEffect(() => {
     if (location.state?.initialTab) {
-      setStatusFilter(location.state.initialTab.toLowerCase());
+      const tab = location.state.initialTab.toLowerCase();
+      setStatusFilter(tab);
+      scrollRestoredRef.current = true;
+      const stored = readStoredViewState() || {};
+      stored.activeTab = tab;
+      stored.shouldRestoreScroll = false;
+      stored.scrollOffset = 0;
+      writeStoredViewState(stored);
     } else if (searchParams.get('status')) {
-      setStatusFilter(searchParams.get('status').toLowerCase());
+      const tab = searchParams.get('status').toLowerCase();
+      setStatusFilter(tab);
+      scrollRestoredRef.current = true;
+      const stored = readStoredViewState() || {};
+      stored.activeTab = tab;
+      stored.shouldRestoreScroll = false;
+      stored.scrollOffset = 0;
+      writeStoredViewState(stored);
     }
   }, [location.state, searchParams]);
+
+  // Continuously record scroll position so the latest offset is preserved
+  useEffect(() => {
+    const onScroll = () => {
+      const stored = readStoredViewState();
+      if (stored) {
+        const offset = getScrollOffset();
+        if (offset > 0) {
+          stored.scrollOffset = offset;
+          writeStoredViewState(stored);
+        }
+      }
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    const mainEl = document.querySelector('main');
+    if (mainEl) mainEl.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (mainEl) mainEl.removeEventListener('scroll', onScroll);
+    };
+  }, []);
+
+  // Precise scroll restoration after asynchronous client list render
+  useEffect(() => {
+    if (loading || clients.length === 0 || scrollRestoredRef.current) return;
+
+    const stored = readStoredViewState();
+    if (stored && stored.shouldRestoreScroll && stored.scrollOffset > 0) {
+      scrollRestoredRef.current = true;
+      const targetOffset = stored.scrollOffset;
+
+      const timer = setTimeout(() => {
+        requestAnimationFrame(() => {
+          setScrollOffset(targetOffset);
+
+          // Verification pass after layout settling
+          setTimeout(() => {
+            setScrollOffset(targetOffset);
+          }, 30);
+        });
+      }, 50);
+
+      stored.shouldRestoreScroll = false;
+      writeStoredViewState(stored);
+
+      return () => clearTimeout(timer);
+    }
+  }, [loading, clients]);
 
   const [isFormModalOpen, setIsFormModalOpen] = useState(false);
   const [editingClient, setEditingClient] = useState(null);
@@ -146,7 +315,6 @@ const Clients = () => {
   const [clientToSettle, setClientToSettle] = useState(null);
 
   const activeTab = (statusFilter || 'all').toUpperCase();
-  const setActiveTab = (tab) => setStatusFilter(tab.toLowerCase());
 
   // ── fetch ──────────────────────────────────────────────────────────────────
   const fetchStats = async () => {
@@ -161,8 +329,8 @@ const Clients = () => {
     }
   };
 
-  const fetchClients = async () => {
-    setLoading(true);
+  const fetchClients = async (showLoading = false) => {
+    if (showLoading) setLoading(true);
     try {
       const apiFn = window.electronAPI?.clients?.getAll || window.electronAPI?.getAllClients;
       if (apiFn) {
@@ -196,7 +364,7 @@ const Clients = () => {
         return client;
       })
     );
-    await fetchClients();
+    await fetchClients(false);
   };
 
   const fetchPackages = async () => {
@@ -204,24 +372,32 @@ const Clients = () => {
     if (result.success) setPackages(result.packages.filter(p => p.is_active === 1));
   };
 
-  useEffect(() => { fetchPackages(); }, []);
+  useEffect(() => {
+    fetchPackages();
+    fetchClients(true);
+  }, []);
 
   useEffect(() => {
-    window.addEventListener('focus', fetchClients);
-    window.addEventListener('dashboard-refresh', fetchClients);
+    const handleRefresh = () => fetchClients(false);
+    window.addEventListener('focus', handleRefresh);
+    window.addEventListener('dashboard-refresh', handleRefresh);
     return () => {
-      window.removeEventListener('focus', fetchClients);
-      window.removeEventListener('dashboard-refresh', fetchClients);
+      window.removeEventListener('focus', handleRefresh);
+      window.removeEventListener('dashboard-refresh', handleRefresh);
     };
-  }, [searchQuery]);
+  }, []);
 
   useEffect(() => {
-    const id = setTimeout(fetchClients, 300);
+    const id = setTimeout(() => fetchClients(false), 300);
     return () => clearTimeout(id);
   }, [searchQuery]);
 
   const debtCount = useMemo(() => {
     return clients.filter((c) => Number(c.remaining_debt || 0) > 0).length;
+  }, [clients]);
+
+  const birthdaysCount = useMemo(() => {
+    return clients.filter((c) => isClientBirthdayToday(c)).length;
   }, [clients]);
 
   const displayedClients = useMemo(() => {
@@ -247,6 +423,9 @@ const Clients = () => {
       if (activeTab === 'DEBT') {
         return Number(client.remaining_debt || 0) > 0;
       }
+      if (activeTab === 'BIRTHDAYS') {
+        return isClientBirthdayToday(client);
+      }
       return true; // 'ALL' tab
     });
 
@@ -256,6 +435,8 @@ const Clients = () => {
         if (debtDiff !== 0) return debtDiff;
         return (b.id || 0) - (a.id || 0);
       });
+    } else if (activeTab === 'BIRTHDAYS') {
+      result.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     } else if (activeTab === 'EXPIRED') {
       result.sort((a, b) => {
         const dateA = new Date(a.end_date || a.subscription_end || a.latest_end_date || 0).getTime();
@@ -551,7 +732,7 @@ const Clients = () => {
       </div>
 
       {/* KPI Cards Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
         <div 
           onClick={() => setActiveTab('ALL')}
           className={`card p-5 bg-[#121721] border ${activeTab === 'ALL' ? 'border-slate-400 bg-slate-800/20' : 'border-[#222B3D] hover:border-slate-600'} cursor-pointer transition-colors`}
@@ -614,11 +795,24 @@ const Clients = () => {
             {debtCount}
           </h3>
         </div>
+
+        <div 
+          onClick={() => setActiveTab('BIRTHDAYS')}
+          className={`card p-5 bg-[#121721] border ${activeTab === 'BIRTHDAYS' ? 'border-yellow-400 bg-yellow-400/10' : 'border-[#222B3D] hover:border-yellow-400/50'} cursor-pointer transition-colors`}
+        >
+          <div className="flex justify-between items-start">
+            <p className={`text-xs font-bold uppercase tracking-widest ${activeTab === 'BIRTHDAYS' ? 'text-yellow-400' : 'text-slate-400'}`}>Birthdays</p>
+            <Cake className={`w-4 h-4 ${activeTab === 'BIRTHDAYS' ? 'text-yellow-400' : 'text-slate-500'}`} />
+          </div>
+          <h3 className={`text-3xl font-black font-display mt-2 ${activeTab === 'BIRTHDAYS' ? 'text-yellow-400' : 'text-yellow-300'}`}>
+            {birthdaysCount}
+          </h3>
+        </div>
       </div>
 
       {/* Table card */}
       <div className="card overflow-hidden bg-[#121721] border border-[#222B3D] flex flex-col min-h-[500px]">
-        {/* Search */}
+        {/* Search Toolbar */}
         <div className="p-5 border-b border-[#222B3D] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="relative max-w-md w-full">
             <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
@@ -627,14 +821,26 @@ const Clients = () => {
             <input
               type="text"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => handleSearchChange(e.target.value)}
               placeholder="Search clients..."
               className="w-full pl-9 pr-4 py-2 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white text-sm focus:border-[#CCFF00] outline-none transition-colors"
             />
           </div>
-          <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
-            Showing {displayedClients.length} · Filter: {statusFilter}
-          </p>
+          <div className="flex items-center gap-3">
+            <p className="text-xs text-slate-500 font-bold uppercase tracking-widest">
+              Showing {displayedClients.length} · Filter: <span className="text-slate-300 font-semibold">{activeTab === 'BIRTHDAYS' ? 'Birthdays' : activeTab}</span>
+            </p>
+            {activeTab !== 'ALL' && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('ALL')}
+                className="text-[11px] font-bold text-slate-400 hover:text-white underline cursor-pointer"
+                title="Reset to All Clients"
+              >
+                Clear Filter
+              </button>
+            )}
+          </div>
         </div>
 
         {loading ? (
@@ -659,7 +865,7 @@ const Clients = () => {
                   <tr
                     key={client.id}
                     className="hover:bg-[#181E2A] transition-colors cursor-pointer group"
-                    onClick={() => navigate(`/clients/${client.id}`)}
+                    onClick={() => handleOpenClient(client.id)}
                   >
                     <td className="px-6 py-4 text-slate-500 font-mono text-xs">{client.client_code}</td>
                     <td className="px-6 py-4">
@@ -668,6 +874,15 @@ const Clients = () => {
                         <span className="font-bold text-white text-sm">
                           {client.name}
                         </span>
+                        {isClientBirthdayToday(client) && (
+                          <span 
+                            title="Today is their birthday!"
+                            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-400/15 text-yellow-400 border border-yellow-400/30 ml-2"
+                          >
+                            <Cake className="w-3 h-3 text-yellow-400" />
+                            <span>Birthday Today 🎉</span>
+                          </span>
+                        )}
                         {Number(client.remaining_debt) > 0 && activeTab !== 'DEBT' && (
                           <span 
                             title={`Remaining Balance: ${Number(client.remaining_debt).toLocaleString()} EGP`}
@@ -727,7 +942,14 @@ const Clients = () => {
                             title="Delete"
                           ><Trash2 className="w-4 h-4" /></button>
                         )}
-                        <ChevronRight className="w-4 h-4 text-slate-600 ml-1" />
+                        <button
+                          type="button"
+                          onClick={() => handleOpenClient(client.id)}
+                          className="p-1 text-slate-600 hover:text-white transition-colors cursor-pointer"
+                          title="View Profile"
+                        >
+                          <ChevronRight className="w-4 h-4" />
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -737,7 +959,11 @@ const Clients = () => {
                     <td colSpan={activeTab === 'DEBT' ? 6 : 5} className="px-6 py-16 text-center text-slate-500">
                       <User className="w-10 h-10 mx-auto mb-3 opacity-30" />
                       <p className="font-bold uppercase tracking-widest text-sm">
-                        {activeTab === 'DEBT' ? 'No members with outstanding debt.' : 'No athletes found.'}
+                        {activeTab === 'BIRTHDAYS'
+                          ? 'No birthdays today.'
+                          : activeTab === 'DEBT'
+                          ? 'No members with outstanding debt.'
+                          : 'No athletes found.'}
                       </p>
                     </td>
                   </tr>

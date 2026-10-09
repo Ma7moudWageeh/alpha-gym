@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { Users, Clock, MessageSquare, RefreshCw, X, CreditCard, ChevronRight, Printer, Snowflake } from 'lucide-react';
+import { Users, Clock, MessageSquare, RefreshCw, X, CreditCard, ChevronRight, Printer, Snowflake, Cake, DollarSign } from 'lucide-react';
 import CheckInModal from '../components/CheckInModal';
-import { formatDateDDMMYYYY, getClientEffectiveStatus, calculateDaysRemaining, getTodayStr, addDays } from '../utils/dateFormat';
+import { formatDateDDMMYYYY, getClientEffectiveStatus, calculateDaysRemaining, getTodayStr, addDays, isClientBirthdayToday } from '../utils/dateFormat';
 import DateInput from '../components/DateInput';
 
 import { WhatsAppSingleButton } from '../components/common/WhatsAppButton';
@@ -24,6 +24,9 @@ const Dashboard = () => {
   const [expiringList, setExpiringList] = useState([]);
   const [recentPayments, setRecentPayments] = useState([]);
   const [packages, setPackages] = useState([]);
+  const [debtsCount, setDebtsCount] = useState(0);
+  const [debtsTotal, setDebtsTotal] = useState(0);
+  const [todayBirthdays, setTodayBirthdays] = useState([]);
   const [loading, setLoading] = useState(true);
   const [checkInOpen, setCheckInOpen] = useState(false);
 
@@ -40,19 +43,33 @@ const Dashboard = () => {
 
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
-    const [metricsRes, countsRes, expiringRes, payRes, pkgRes] = await Promise.all([
+    const [metricsRes, countsRes, expiringRes, payRes, pkgRes, clientsRes, bdayRes] = await Promise.all([
       window.electronAPI.reports.getDashboardMetrics(),
       window.electronAPI.alerts.getCounts(),
       window.electronAPI.alerts.getExpiringSoon(),
       window.electronAPI.payments.getAll(),
-      window.electronAPI.packages.getAll()
+      window.electronAPI.packages.getAll(),
+      window.electronAPI.clients?.getAll?.() || { success: false },
+      window.electronAPI.clients?.getTodayBirthdays ? window.electronAPI.clients.getTodayBirthdays() : { success: false }
     ]);
 
-    if (metricsRes.success) setMetrics(metricsRes.metrics);
-    if (countsRes.success) setCounts(countsRes);
-    if (expiringRes.success) setExpiringList(expiringRes.subscriptions);
-    if (payRes.success) setRecentPayments(payRes.payments.slice(0, 6));
-    if (pkgRes.success) setPackages(pkgRes.packages.filter(p => p.is_active === 1));
+    if (metricsRes?.success) setMetrics(metricsRes.metrics);
+    if (countsRes?.success) setCounts(countsRes);
+    if (expiringRes?.success) setExpiringList(expiringRes.subscriptions);
+    if (payRes?.success) setRecentPayments(payRes.payments.slice(0, 6));
+    if (pkgRes?.success) setPackages(pkgRes.packages.filter(p => p.is_active === 1));
+
+    const allClients = Array.isArray(clientsRes) ? clientsRes : (clientsRes?.clients || []);
+    const withDebts = allClients.filter(c => Number(c.remaining_debt || 0) > 0);
+    setDebtsCount(withDebts.length);
+    setDebtsTotal(withDebts.reduce((sum, c) => sum + Number(c.remaining_debt || 0), 0));
+
+    if (bdayRes?.success && Array.isArray(bdayRes.birthdays)) {
+      setTodayBirthdays(bdayRes.birthdays);
+    } else {
+      const bdays = allClients.filter(c => isClientBirthdayToday(c));
+      setTodayBirthdays(bdays);
+    }
 
     setLoading(false);
   }, []);
@@ -197,6 +214,19 @@ const Dashboard = () => {
     return status === 'ACTIVE' && daysRemaining <= 1;
   });
 
+  const visibleCardsCount = 1
+    + (metrics.frozenMembers > 0 ? 1 : 0)
+    + (debtsCount > 0 ? 1 : 0)
+    + (todayBirthdays.length > 0 ? 1 : 0);
+
+  const gridColsClass = visibleCardsCount === 1
+    ? 'grid-cols-1 max-w-md'
+    : visibleCardsCount === 2
+    ? 'grid-cols-1 sm:grid-cols-2'
+    : visibleCardsCount === 3
+    ? 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'
+    : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-4';
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -204,16 +234,32 @@ const Dashboard = () => {
           <h1 className="text-3xl font-black font-display text-white uppercase tracking-wider">Dashboard</h1>
           <p className="text-slate-400 mt-1 uppercase tracking-widest text-xs font-bold">Welcome back, {user?.fullName || 'Operator'}!</p>
         </div>
+        {isOwner && (
+          <div
+            onClick={() => navigate('/reports')}
+            className="flex items-center gap-3 px-4 py-2 bg-[#121721] border border-[#222B3D] hover:border-[#CCFF00]/40 rounded-xl cursor-pointer transition-colors"
+            title="View Financial Reports"
+          >
+            <div>
+              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Today's Revenue</p>
+              <p className="text-base font-black font-mono text-[#CCFF00]">{metrics.todayRevenue.toFixed(2)} EGP</p>
+            </div>
+            <div className="p-2 bg-[#CCFF00]/10 rounded-lg border border-[#CCFF00]/20">
+              <CreditCard className="w-4 h-4 text-[#CCFF00]" />
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className={`grid grid-cols-1 md:grid-cols-2 ${isOwner ? 'lg:grid-cols-3' : 'lg:grid-cols-2'} gap-6`}>
+      <div className={`grid ${gridColsClass} gap-6`}>
+        {/* Active Members Card — ALWAYS Visible */}
         <div
           onClick={() => navigate('/clients', { state: { initialTab: 'ACTIVE' } })}
           className="card p-6 bg-[#121721] border-t-4 border-[#CCFF00] flex items-center justify-between cursor-pointer hover:border-[#CCFF00] hover:scale-[1.01] transition-all shadow-sm"
         >
           <div>
             <p className="text-sm font-bold uppercase tracking-widest text-slate-400">Active</p>
-            <h3 className="text-4xl font-black font-display text-white mt-2">{metrics.activeMembers}</h3>
+            <h3 className="text-4xl font-black font-display text-white mt-2">{metrics.activeMembers || 0}</h3>
             <p className="text-xs text-[#CCFF00] mt-1 font-bold tracking-widest uppercase">Currently Subscribed</p>
           </div>
           <div className="p-3 bg-[#CCFF00]/10 rounded-xl border border-[#CCFF00]/20">
@@ -221,32 +267,55 @@ const Dashboard = () => {
           </div>
         </div>
 
-        <div
-          onClick={() => navigate('/clients', { state: { initialTab: 'FROZEN' } })}
-          className="card p-6 bg-[#121721] border-t-4 border-[#06B6D4] flex items-center justify-between cursor-pointer hover:border-[#06B6D4] hover:scale-[1.01] transition-all shadow-sm"
-        >
-          <div>
-            <p className="text-sm font-bold uppercase tracking-widest text-slate-400">Frozen</p>
-            <h3 className="text-4xl font-black font-display text-[#06B6D4] mt-2">{metrics.frozenMembers || 0}</h3>
-            <p className="text-xs text-[#06B6D4]/80 mt-1 font-bold tracking-widest uppercase">Membership Paused</p>
-          </div>
-          <div className="p-3 bg-[#06B6D4]/10 rounded-xl border border-[#06B6D4]/20">
-            <Snowflake className="w-6 h-6 text-[#06B6D4]" />
-          </div>
-        </div>
-
-        {isOwner && (
+        {/* Frozen Members Card — ONLY Visible if frozenCount > 0 */}
+        {metrics.frozenMembers > 0 && (
           <div
-            onClick={() => navigate('/reports')}
-            className="card p-6 bg-[#121721] border-t-4 border-[#CCFF00] flex items-center justify-between cursor-pointer hover:border-[#CCFF00] hover:scale-[1.01] transition-all shadow-sm"
+            onClick={() => navigate('/clients', { state: { initialTab: 'FROZEN' } })}
+            className="card p-6 bg-[#121721] border-t-4 border-[#06B6D4] flex items-center justify-between cursor-pointer hover:border-[#06B6D4] hover:scale-[1.01] transition-all shadow-sm"
           >
             <div>
-              <p className="text-sm font-bold uppercase tracking-widest text-slate-400">Today's Rev</p>
-              <h3 className="text-3xl font-black font-display text-[#CCFF00] mt-2">{metrics.todayRevenue.toFixed(2)} EGP</h3>
-              <p className="text-xs text-slate-500 mt-1 font-bold tracking-widest uppercase">Month: {metrics.monthRevenue.toFixed(2)}</p>
+              <p className="text-sm font-bold uppercase tracking-widest text-slate-400">Frozen</p>
+              <h3 className="text-4xl font-black font-display text-[#06B6D4] mt-2">{metrics.frozenMembers}</h3>
+              <p className="text-xs text-[#06B6D4]/80 mt-1 font-bold tracking-widest uppercase">Membership Paused</p>
             </div>
-            <div className="p-3 bg-[#CCFF00]/10 rounded-xl border border-[#CCFF00]/20">
-              <CreditCard className="w-6 h-6 text-[#CCFF00]" />
+            <div className="p-3 bg-[#06B6D4]/10 rounded-xl border border-[#06B6D4]/20">
+              <Snowflake className="w-6 h-6 text-[#06B6D4]" />
+            </div>
+          </div>
+        )}
+
+        {/* Outstanding Balances (Debts) Card — ONLY Visible if debtsCount > 0 */}
+        {debtsCount > 0 && (
+          <div
+            onClick={() => navigate('/clients', { state: { initialTab: 'DEBT' } })}
+            className="card p-6 bg-[#121721] border-t-4 border-amber-500 flex items-center justify-between cursor-pointer hover:border-amber-400 hover:scale-[1.01] transition-all shadow-sm"
+          >
+            <div>
+              <p className="text-sm font-bold uppercase tracking-widest text-slate-400">Outstanding Balances</p>
+              <h3 className="text-4xl font-black font-display text-amber-400 mt-2">{debtsCount}</h3>
+              <p className="text-xs text-amber-400/80 mt-1 font-bold tracking-widest uppercase">
+                {debtsTotal > 0 ? `${debtsTotal.toLocaleString()} EGP Total` : 'Unpaid Balances'}
+              </p>
+            </div>
+            <div className="p-3 bg-amber-500/10 rounded-xl border border-amber-500/20">
+              <DollarSign className="w-6 h-6 text-amber-400" />
+            </div>
+          </div>
+        )}
+
+        {/* Today's Birthdays Card — ONLY Visible if todayBirthdays > 0 */}
+        {todayBirthdays.length > 0 && (
+          <div
+            onClick={() => navigate('/clients', { state: { initialTab: 'BIRTHDAYS' } })}
+            className="card p-6 bg-[#121721] border-t-4 border-yellow-400 flex items-center justify-between cursor-pointer hover:border-yellow-300 hover:scale-[1.01] transition-all shadow-sm"
+          >
+            <div>
+              <p className="text-sm font-bold uppercase tracking-widest text-slate-400">Today's Birthdays</p>
+              <h3 className="text-4xl font-black font-display text-yellow-400 mt-2">{todayBirthdays.length}</h3>
+              <p className="text-xs text-yellow-400/80 mt-1 font-bold tracking-widest uppercase">Celebrations Today 🎂</p>
+            </div>
+            <div className="p-3 bg-yellow-400/10 rounded-xl border border-yellow-400/20">
+              <Cake className="w-6 h-6 text-yellow-400" />
             </div>
           </div>
         )}

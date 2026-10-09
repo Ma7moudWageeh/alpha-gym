@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext, useCallback, useRef } from 'rea
 import { useParams, useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import {
-  ArrowLeft, Edit2, Trash2, Plus, Printer, Snowflake, Sun,
+  ArrowLeft, Edit2, Pencil, Trash2, Plus, Printer, Snowflake, Sun,
   User, Phone, Calendar, Scale, MapPin, Activity, Heart,
   FileText, RefreshCw, AlertCircle, CheckSquare, Square, X,
   TrendingUp, TrendingDown, Minus, Camera, Trash
@@ -60,6 +60,28 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+// ─── EDIT CLIENT FORM FIELD (Top-level declaration prevents focus-loss unmounts) ───
+const EditClientFormField = ({ label, value, onChange, type = 'text', placeholder = '' }) => (
+  <div className="space-y-1.5">
+    <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">{label}</label>
+    {type === 'date' ? (
+      <DateInput
+        value={value}
+        onChange={onChange}
+        className="w-full px-3 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm font-mono"
+      />
+    ) : (
+      <input
+        type={type}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        className="w-full px-3 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
+      />
+    )}
+  </div>
+);
+
 // ─── EDIT MODAL ────────────────────────────────────────────────────────────────
 const EditClientModal = ({ client, packages, onClose, onSaved }) => {
   const [form, setForm] = useState({
@@ -104,27 +126,6 @@ const EditClientModal = ({ client, packages, onClose, onSaved }) => {
     onSaved();
   };
 
-  const F = ({ label, field, type = 'text', placeholder = '' }) => (
-    <div className="space-y-1.5">
-      <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">{label}</label>
-      {type === 'date' ? (
-        <DateInput
-          value={form[field]}
-          onChange={(iso) => setForm(p => ({ ...p, [field]: iso }))}
-          className="w-full px-3 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm font-mono"
-        />
-      ) : (
-        <input
-          type={type}
-          value={form[field]}
-          onChange={e => setForm(p => ({ ...p, [field]: e.target.value }))}
-          placeholder={placeholder}
-          className="w-full px-3 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
-        />
-      )}
-    </div>
-  );
-
   return (
     <div className="fixed inset-0 bg-[#0B0E14]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
       <div className="bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-2xl flex flex-col max-h-[90vh]">
@@ -141,14 +142,54 @@ const EditClientModal = ({ client, packages, onClose, onSaved }) => {
             </div>
           )}
           <div className="grid grid-cols-2 gap-4">
-            <F label="Full Name *" field="name" />
-            <F label="Phone *" field="phone" />
-            <F label="Date of Birth" field="birth_date" type="date" />
-            <F label="Village / Area" field="area" placeholder="e.g. Nasr City" />
-            <F label="Height (cm)" field="height_cm" type="number" placeholder="175" />
-            <F label="Weight (kg)" field="weight_kg" type="number" placeholder="80" />
-            <F label="Other Sports" field="other_sports" placeholder="Swimming, Football…" />
-            <F label="Injuries" field="injuries" placeholder="Knee surgery 2022…" />
+            <EditClientFormField
+              label="Full Name *"
+              value={form.name}
+              onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
+            />
+            <EditClientFormField
+              label="Phone *"
+              value={form.phone}
+              onChange={e => setForm(p => ({ ...p, phone: e.target.value }))}
+            />
+            <EditClientFormField
+              label="Date of Birth"
+              value={form.birth_date}
+              type="date"
+              onChange={(iso) => setForm(p => ({ ...p, birth_date: iso }))}
+            />
+            <EditClientFormField
+              label="Village / Area"
+              value={form.area}
+              placeholder="e.g. Nasr City"
+              onChange={e => setForm(p => ({ ...p, area: e.target.value }))}
+            />
+            <EditClientFormField
+              label="Height (cm)"
+              value={form.height_cm}
+              type="number"
+              placeholder="175"
+              onChange={e => setForm(p => ({ ...p, height_cm: e.target.value }))}
+            />
+            <EditClientFormField
+              label="Weight (kg)"
+              value={form.weight_kg}
+              type="number"
+              placeholder="80"
+              onChange={e => setForm(p => ({ ...p, weight_kg: e.target.value }))}
+            />
+            <EditClientFormField
+              label="Other Sports"
+              value={form.other_sports}
+              placeholder="Swimming, Football…"
+              onChange={e => setForm(p => ({ ...p, other_sports: e.target.value }))}
+            />
+            <EditClientFormField
+              label="Injuries"
+              value={form.injuries}
+              placeholder="Knee surgery 2022…"
+              onChange={e => setForm(p => ({ ...p, injuries: e.target.value }))}
+            />
           </div>
           <button
             type="button"
@@ -412,53 +453,234 @@ const SubscriptionModal = ({ client, packages, isRenew, onClose, onSaved }) => {
   );
 };
 
-
-
-// ─── WEIGHT MODAL ──────────────────────────────────────────────────────────────
-const WeightModal = ({ client, onClose, onSaved }) => {
-  const [weight, setWeight] = useState(client.weight_kg ? String(client.weight_kg) : '');
-  const [notes, setNotes] = useState('');
+// ─── EDIT SUBSCRIPTION MODAL (Top-level declaration prevents focus loss) ───────
+const EditSubscriptionModal = ({ subscription, packages, onClose, onSaved }) => {
+  const [form, setForm] = useState({
+    package_id: subscription?.package_id ? subscription.package_id.toString() : (subscription?.plan_id ? subscription.plan_id.toString() : ''),
+    start_date: subscription?.start_date || '',
+    end_date: subscription?.end_date || '',
+    price: subscription?.price !== undefined && subscription?.price !== null ? subscription.price.toString() : '',
+    paid_amount: subscription?.paid_amount !== undefined && subscription?.paid_amount !== null ? subscription.paid_amount.toString() : '',
+    note: '',
+  });
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const save = async () => {
+  const cleanPrice = Number(parseFloat(form.price || 0).toFixed(2));
+  const cleanPaid = Number(parseFloat(form.paid_amount || 0).toFixed(2));
+  const planPrice = Math.max(0, cleanPrice);
+  const paidAmount = Math.max(0, cleanPaid);
+  const remainingAmount = Math.max(0, Number((planPrice - paidAmount).toFixed(2)));
+
+  const handlePkgSelect = (id) => {
+    const p = packages.find(item => item.id.toString() === id);
+    const newPrice = p ? p.default_price.toString() : form.price;
+    let newEndDate = form.end_date;
+    if (form.start_date && p?.duration_days) {
+      newEndDate = addDays(form.start_date, p.duration_days - 1);
+    }
+    setForm(prev => ({
+      ...prev,
+      package_id: id,
+      price: newPrice,
+      paid_amount: prev.paid_amount === prev.price ? newPrice : prev.paid_amount,
+      end_date: newEndDate
+    }));
+  };
+
+  const handleStartDateChange = (iso) => {
+    const p = packages.find(item => item.id.toString() === form.package_id);
+    const duration = p ? p.duration_days : (subscription?.duration_days || 30);
+    const newEndDate = iso ? addDays(iso, duration - 1) : form.end_date;
+    setForm(prev => ({
+      ...prev,
+      start_date: iso,
+      end_date: newEndDate
+    }));
+  };
+
+  const submit = async () => {
     setError('');
-    if (!weight || parseFloat(weight) <= 0) { setError('Valid weight is required.'); return; }
+    if (!form.package_id) {
+      setError('Please select a membership package.');
+      return;
+    }
+    if (!form.start_date) {
+      setError('Start date is required.');
+      return;
+    }
+    if (!form.end_date) {
+      setError('End date is required.');
+      return;
+    }
+    if (form.price === '' || isNaN(cleanPrice) || cleanPrice < 0) {
+      setError('Valid price is required.');
+      return;
+    }
+    if (form.paid_amount === '' || isNaN(cleanPaid) || cleanPaid < 0) {
+      setError('Valid paid amount is required.');
+      return;
+    }
+
     setSaving(true);
-    const res = await window.electronAPI.bodyProgress.add({
-      client_id: client.id,
-      weight_kg: parseFloat(weight),
-      notes,
-    });
-    setSaving(false);
-    if (res.error) { setError(res.error); return; }
-    onSaved();
+    try {
+      const res = await window.electronAPI.subscriptions.update({
+        subscriptionId: subscription.id,
+        clientId: subscription.client_id,
+        package_id: parseInt(form.package_id, 10),
+        plan_id: parseInt(form.package_id, 10),
+        startDate: form.start_date,
+        endDate: form.end_date,
+        price: planPrice,
+        paidAmount: paidAmount,
+        note: form.note || undefined
+      });
+
+      setSaving(false);
+      if (res?.error) {
+        setError(res.error);
+        return;
+      }
+      onSaved();
+    } catch (err) {
+      setSaving(false);
+      setError(err.message || 'Failed to update subscription.');
+    }
   };
 
   return (
     <div className="fixed inset-0 bg-[#0B0E14]/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-      <div className="bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-sm flex flex-col">
+      <div className="bg-[#121721] border border-[#222B3D] rounded-2xl shadow-2xl w-full max-w-md flex flex-col">
         <div className="px-6 py-4 border-b border-[#222B3D] flex justify-between items-center">
-          <h3 className="text-lg font-black font-display uppercase tracking-wider text-white flex items-center gap-2"><Scale className="w-5 h-5 text-[#CCFF00]" />Log Weight</h3>
-          <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white hover:bg-[#181E2A] rounded-xl transition-colors"><X className="w-5 h-5" /></button>
+          <h3 className="text-lg font-black font-display uppercase tracking-wider text-white flex items-center gap-2">
+            <Edit2 className="w-5 h-5 text-[#CCFF00]" />
+            Edit Subscription
+          </h3>
+          <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white hover:bg-[#181E2A] rounded-xl transition-colors">
+            <X className="w-5 h-5" />
+          </button>
         </div>
+
         <div className="p-6 space-y-4">
-          {error && <div className="bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl text-sm">{error}</div>}
+          {error && (
+            <div className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-400 p-3 rounded-xl text-sm">
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+              <span>{error}</span>
+            </div>
+          )}
+
+          {/* Package Selection */}
           <div className="space-y-1.5">
-            <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Weight (kg) *</label>
-            <input type="number" step="0.1" value={weight} onChange={e => setWeight(e.target.value)} autoFocus
-              className="w-full px-4 py-3 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white text-xl font-black font-display uppercase tracking-wider outline-none focus:border-[#CCFF00] transition-colors" />
+            <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Plan / Package *</label>
+            <select
+              value={form.package_id}
+              onChange={e => handlePkgSelect(e.target.value)}
+              className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
+            >
+              <option value="">Select package…</option>
+              {packages.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.title} ({p.duration_days}d) — {p.default_price} EGP
+                </option>
+              ))}
+            </select>
           </div>
+
+          {/* Dates: Start & End */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Start Date *</label>
+              <DateInput
+                value={form.start_date}
+                onChange={handleStartDateChange}
+                className="w-full px-3 py-2 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors font-mono text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">End Date *</label>
+              <DateInput
+                value={form.end_date}
+                onChange={(iso) => setForm(p => ({ ...p, end_date: iso }))}
+                className="w-full px-3 py-2 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors font-mono text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Pricing: Price & Paid Amount */}
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Price (EGP) *</label>
+              <input
+                type="number"
+                step="0.01"
+                value={form.price}
+                onChange={e => {
+                  const val = e.target.value;
+                  setForm(p => ({
+                    ...p,
+                    price: val,
+                    paid_amount: p.paid_amount === p.price ? val : p.paid_amount
+                  }));
+                }}
+                className="w-full px-3 py-2 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Paid Amount (EGP) *</label>
+              <input
+                type="number"
+                step="0.01"
+                value={form.paid_amount}
+                onChange={e => setForm(p => ({ ...p, paid_amount: e.target.value }))}
+                className="w-full px-3 py-2 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Pricing Breakdown Card */}
+          <div className="p-3 bg-[#0B0E14] border border-[#222B3D] rounded-xl space-y-1 text-xs">
+            <div className="flex justify-between text-slate-400">
+              <span>Subscription Price:</span>
+              <span className="font-semibold text-white">{planPrice} EGP</span>
+            </div>
+            <div className="flex justify-between text-slate-400">
+              <span>Paid to Date:</span>
+              <span className="font-semibold text-[#CCFF00]">{paidAmount} EGP</span>
+            </div>
+            <div className={`flex justify-between border-t border-[#222B3D] pt-1 ${remainingAmount > 0 ? 'text-amber-400 font-bold' : 'text-slate-400'}`}>
+              <span>Remaining Balance / Debt:</span>
+              <span>{remainingAmount} EGP</span>
+            </div>
+          </div>
+
+          {/* Note */}
           <div className="space-y-1.5">
-            <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Notes (optional)</label>
-            <input type="text" value={notes} onChange={e => setNotes(e.target.value)} placeholder="After morning workout…"
-              className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors" />
+            <label className="text-slate-300 text-[10px] font-bold uppercase tracking-widest">Adjustment Note (optional)</label>
+            <input
+              type="text"
+              value={form.note}
+              onChange={e => setForm(p => ({ ...p, note: e.target.value }))}
+              placeholder="e.g. Upgraded package, date correction"
+              className="w-full px-4 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-white outline-none focus:border-[#CCFF00] transition-colors text-sm"
+            />
           </div>
         </div>
+
         <div className="px-6 py-4 border-t border-[#222B3D] bg-[#121721]/40 flex justify-end gap-3">
-          <button onClick={onClose} className="px-4 py-2.5 bg-[#181E2A] hover:bg-slate-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors">Cancel</button>
-          <button onClick={save} disabled={saving} className="px-5 py-2 bg-[#CCFF00] text-black font-black uppercase tracking-wider hover:bg-[#b8e600] disabled:opacity-60 text-black rounded-xl text-sm font-semibold transition-colors">
-            {saving ? 'Saving…' : 'Save'}
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-4 py-2.5 bg-[#181E2A] hover:bg-slate-700 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={saving}
+            className="flex items-center gap-2 px-5 py-2.5 bg-[#CCFF00] text-black font-black uppercase tracking-wider hover:bg-[#b8e600] disabled:opacity-60 rounded-xl text-sm transition-colors cursor-pointer"
+          >
+            {saving ? 'Saving…' : 'Save Changes'}
           </button>
         </div>
       </div>
@@ -472,6 +694,7 @@ const ClientProfile = () => {
   const navigate = useNavigate();
   const { user } = useContext(AuthContext);
   const isOwner = user?.role === 'owner';
+  const canDeleteSub = user?.role === 'owner' || user?.role === 'admin';
 
   const [client, setClient] = useState(null);
   const [packages, setPackages] = useState([]);
@@ -495,10 +718,11 @@ const ClientProfile = () => {
   const [freezeError, setFreezeError] = useState('');
   const [freezing, setFreezing] = useState(false);
 
-  // Selective client delete & subscription void states
+  // Selective client delete & subscription edit/delete states
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [purgeFinancials, setPurgeFinancials] = useState(false);
   const [deletingClient, setDeletingClient] = useState(false);
+  const [selectedSubToEdit, setSelectedSubToEdit] = useState(null);
   const [selectedSubToVoid, setSelectedSubToVoid] = useState(null);
   const [voidingSub, setVoidingSub] = useState(false);
 
@@ -561,25 +785,45 @@ const ClientProfile = () => {
 
   const handleConfirmVoidSubscription = async () => {
     if (!selectedSubToVoid || !client) return;
+    if (!canDeleteSub) {
+      alert('Unauthorized: Only gym owners can delete subscriptions');
+      return;
+    }
     setVoidingSub(true);
     try {
       const res = await window.electronAPI.subscriptions.delete({
         clientId: client.id,
-        subscriptionId: selectedSubToVoid.id
+        subscriptionId: selectedSubToVoid.id,
+        userRole: user?.role
       });
       if (res?.success) {
         setSelectedSubToVoid(null);
         await fetchClient();
         window.dispatchEvent(new Event('dashboard-refresh'));
-        setToastMessage('Subscription voided and financial records updated.');
+        setToastMessage('Subscription deleted and financial records updated.');
       } else {
-        alert(res?.error || 'Failed to void subscription');
+        alert(res?.error || 'Failed to delete subscription');
       }
     } catch (err) {
-      alert(err.message || 'Failed to void subscription');
+      alert(err.message || 'Failed to delete subscription');
     } finally {
       setVoidingSub(false);
     }
+  };
+
+  const handleOpenEditSub = (subscription) => {
+    setSelectedSubToEdit(subscription);
+  };
+
+  const handleDeleteSub = (subscriptionId) => {
+    if (!canDeleteSub) {
+      alert('Unauthorized: Only gym owners can delete subscriptions');
+      return;
+    }
+    const targetSub = typeof subscriptionId === 'object' && subscriptionId !== null
+      ? subscriptionId
+      : (client?.subscriptionHistory?.find(s => s.id === subscriptionId) || { id: subscriptionId });
+    setSelectedSubToVoid(targetSub);
   };
 
   const handleFileSelected = async (e) => {
@@ -1045,7 +1289,9 @@ const ClientProfile = () => {
                       <th className="px-5 py-3 font-medium">Paid</th>
                       <th className="px-5 py-3 font-medium">Remaining</th>
                       <th className="px-5 py-3 font-medium">Status</th>
-                      {isOwner && <th className="px-5 py-3 font-medium text-right">Actions</th>}
+                      <th className="px-4 py-3 text-right text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                        ACTIONS
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800">
@@ -1064,22 +1310,34 @@ const ClientProfile = () => {
                           )}
                         </td>
                         <td className="px-5 py-3.5"><StatusBadge status={sub.status} /></td>
-                        {isOwner && (
-                          <td className="px-5 py-3.5 text-right">
+                        <td className="px-4 py-3.5 text-right">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* Edit Button: Visible to BOTH Owner and Reception */}
                             <button
-                              onClick={() => setSelectedSubToVoid(sub)}
-                              title="Void Subscription & Revert Revenue"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors"
+                              type="button"
+                              onClick={() => handleOpenEditSub(sub)}
+                              title="Edit Subscription (تعديل)"
+                              className="p-1.5 rounded-lg text-slate-400 hover:text-[#CCFF00] hover:bg-[#CCFF00]/10 transition-colors cursor-pointer"
                             >
-                              <svg className="w-4 h-4 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                              </svg>
+                              <Pencil className="w-4 h-4" />
                             </button>
-                          </td>
-                        )}
+
+                            {/* Delete Button: Visible ONLY to Owner / Admin */}
+                            {canDeleteSub && (
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSub(sub.id)}
+                                title="Delete Subscription (حذف)"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
                       </tr>
                     )) : (
-                      <tr><td colSpan={isOwner ? 8 : 7} className="px-5 py-10 text-center text-slate-500">No subscriptions yet.</td></tr>
+                      <tr><td colSpan={8} className="px-5 py-10 text-center text-slate-500">No subscriptions yet.</td></tr>
                     )}
                   </tbody>
                 </table>
@@ -1438,17 +1696,32 @@ const ClientProfile = () => {
         </div>
       )}
 
-      {/* Void Subscription Confirmation Modal */}
+      {/* Edit Subscription Modal */}
+      {selectedSubToEdit && (
+        <EditSubscriptionModal
+          subscription={selectedSubToEdit}
+          packages={packages}
+          onClose={() => setSelectedSubToEdit(null)}
+          onSaved={async () => {
+            setSelectedSubToEdit(null);
+            await fetchClient();
+            window.dispatchEvent(new Event('dashboard-refresh'));
+            setToastMessage('Subscription updated and financial balance refreshed.');
+          }}
+        />
+      )}
+
+      {/* Delete Subscription Confirmation Modal (RBAC: Owner/Admin only) */}
       {selectedSubToVoid && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4">
           <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center gap-3 text-rose-500">
               <span className="p-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xl">⚠️</span>
-              <h3 className="text-lg font-bold text-slate-100">Void Subscription</h3>
+              <h3 className="text-lg font-bold text-slate-100">Delete Subscription</h3>
             </div>
             
             <p className="text-sm text-slate-400 leading-relaxed">
-              Are you sure you want to void this subscription (<strong className="text-slate-200">{selectedSubToVoid.package_title || 'Subscription'}</strong>)? This action cannot be undone.
+              Are you sure you want to delete this subscription (<strong className="text-slate-200">{selectedSubToVoid.package_title || 'Subscription'}</strong>)? This action cannot be undone.
             </p>
 
             <div className="p-3 bg-slate-950/50 rounded-xl border border-slate-800 text-xs text-slate-400 space-y-1.5">
@@ -1459,18 +1732,20 @@ const ClientProfile = () => {
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
+                type="button"
                 onClick={() => setSelectedSubToVoid(null)}
                 disabled={voidingSub}
-                className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors"
+                className="px-4 py-2 text-xs font-semibold text-slate-400 hover:text-slate-200 hover:bg-slate-800 rounded-lg transition-colors cursor-pointer"
               >
                 Cancel
               </button>
               <button
+                type="button"
                 onClick={handleConfirmVoidSubscription}
                 disabled={voidingSub}
-                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-lg transition-colors shadow-lg shadow-rose-600/20 disabled:opacity-50"
+                className="px-4 py-2 text-xs font-bold text-white bg-rose-600 hover:bg-rose-500 rounded-lg transition-colors shadow-lg shadow-rose-600/20 disabled:opacity-50 cursor-pointer"
               >
-                {voidingSub ? 'Voiding...' : 'Confirm Void'}
+                {voidingSub ? 'Deleting...' : 'Confirm Delete'}
               </button>
             </div>
           </div>

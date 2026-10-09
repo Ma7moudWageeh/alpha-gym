@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { AuthContext } from '../context/AuthContext';
-import { Plus, Edit2, Power, X, Database, Download, Upload, FileSpreadsheet, ShieldAlert, CheckCircle2, AlertTriangle, Users, Shield, Trash2, Eye, EyeOff, MessageSquare, Save, Loader2, Archive, Send, Cloud, HelpCircle, ChevronDown, ChevronUp, Key, Hash, ExternalLink, ShieldCheck, Unlink, RefreshCw } from 'lucide-react';
+import { Plus, Edit2, Power, X, Database, Download, Upload, FileSpreadsheet, ShieldAlert, CheckCircle2, AlertTriangle, Users, Shield, Trash2, Eye, EyeOff, MessageSquare, Save, Loader2, Archive, Send, Cloud, ExternalLink, ShieldCheck, Unlink, Folder, FolderOpen, Clock } from 'lucide-react';
 import { formatDateDDMMYYYY } from '../utils/dateFormat';
 import WhatsNewModal from '../components/modals/WhatsNewModal';
 import packageJson from '../../package.json';
@@ -56,6 +56,8 @@ const Settings = () => {
   const [isExportingBackup, setIsExportingBackup] = useState(false);
   const [isRestoringBackup, setIsRestoringBackup] = useState(false);
   const [autoBackupData, setAutoBackupData] = useState({ latestBackup: null, backups: [] });
+  const [backupFolderPath, setBackupFolderPath] = useState('');
+  const [isOpeningFolder, setIsOpeningFolder] = useState(false);
   const [isFactoryResetOpen, setIsFactoryResetOpen] = useState(false);
   const [factoryResetPhrase, setFactoryResetPhrase] = useState('');
   const [factoryResetError, setFactoryResetError] = useState('');
@@ -63,21 +65,18 @@ const Settings = () => {
 
   // Telegram Cloud Sync states
   const [telegramConfig, setTelegramConfig] = useState({
-    botToken: '',
     chatId: '',
     enabled: false,
     verified: false,
+    pendingSync: false,
     lastSentDate: null
   });
-  const [showBotToken, setShowBotToken] = useState(false);
-  const [isSavingTelegram, setIsSavingTelegram] = useState(false);
   const [isTestingTelegram, setIsTestingTelegram] = useState(false);
   const [isSendingCode, setIsSendingCode] = useState(false);
   const [isConfirmingCode, setIsConfirmingCode] = useState(false);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [otpCode, setOtpCode] = useState('');
-  const [showAdvancedOptions, setShowAdvancedOptions] = useState(false);
   const [telegramMsg, setTelegramMsg] = useState({ type: '', text: '' });
 
   // Staff management states
@@ -275,8 +274,27 @@ const Settings = () => {
           });
         }
       }
+      if (window.electronAPI?.backup?.getBackupPath) {
+        const pathRes = await window.electronAPI.backup.getBackupPath();
+        if (pathRes?.success) {
+          setBackupFolderPath(pathRes.path);
+        }
+      }
     } catch (e) {
       console.warn('Failed to load auto backups list:', e);
+    }
+  };
+
+  const handleOpenBackupFolder = async () => {
+    setIsOpeningFolder(true);
+    try {
+      if (window.electronAPI?.backup?.openBackupFolder) {
+        await window.electronAPI.backup.openBackupFolder();
+      }
+    } catch (e) {
+      console.error('Failed to open backup folder:', e);
+    } finally {
+      setIsOpeningFolder(false);
     }
   };
 
@@ -286,10 +304,10 @@ const Settings = () => {
         const res = await window.electronAPI.backup.getTelegramConfig();
         if (res?.success) {
           setTelegramConfig({
-            botToken: res.botToken || '',
             chatId: res.chatId || '',
             enabled: !!res.enabled,
             verified: !!res.verified,
+            pendingSync: !!res.pendingSync,
             lastSentDate: res.lastSentDate || null
           });
         }
@@ -406,25 +424,6 @@ const Settings = () => {
       await window.electronAPI.backup.saveTelegramConfig({ enabled: newEnabled });
     } catch (err) {
       console.warn('Failed to save auto-sync toggle:', err);
-    }
-  };
-
-  const handleSaveTelegramConfig = async () => {
-    if (!isOwner) return;
-    setIsSavingTelegram(true);
-    setTelegramMsg({ type: '', text: '' });
-    try {
-      const res = await window.electronAPI.backup.saveTelegramConfig(telegramConfig);
-      if (res?.success) {
-        setTelegramMsg({ type: 'success', text: 'Configuration saved successfully.' });
-        setTimeout(() => setTelegramMsg({ type: '', text: '' }), 5000);
-      } else {
-        setTelegramMsg({ type: 'error', text: res?.error || 'Failed to save configuration.' });
-      }
-    } catch (err) {
-      setTelegramMsg({ type: 'error', text: err.message || 'An error occurred while saving configuration.' });
-    } finally {
-      setIsSavingTelegram(false);
     }
   };
 
@@ -829,7 +828,7 @@ const Settings = () => {
                       Latest Snapshot: <strong className="text-emerald-400 font-mono">{autoBackupData.latestBackup.date}</strong> ({autoBackupData.latestBackup.sizeMB} MB) • Rolling 7-day retention active
                     </>
                   ) : (
-                    <>Silent daily snapshots run on startup and automatically maintain the last 7 daily archives.</>
+                    <>Silent daily snapshots trigger every 24 hours locally regardless of internet connection.</>
                   )}
                 </p>
               </div>
@@ -837,6 +836,43 @@ const Settings = () => {
             <span className="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5 flex-shrink-0">
               <CheckCircle2 className="w-3.5 h-3.5" /> Protected
             </span>
+          </div>
+
+          {/* Local Backup Directory & Storage Management Card */}
+          <div className="card p-5 bg-[#121721] rounded-2xl border border-[#222B3D] space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-brand-accent/10 rounded-xl border border-brand-accent/20 flex-shrink-0">
+                  <Folder className="w-5 h-5 text-[#CCFF00]" />
+                </div>
+                <div>
+                  <h4 className="text-xs font-black font-display uppercase tracking-wider text-white">
+                    Local Backup Storage Directory
+                  </h4>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Automated snapshots trigger every 24 hours locally. Open folder in Explorer to inspect and delete old files to free up disk space.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleOpenBackupFolder}
+                disabled={isOpeningFolder}
+                className="px-4 py-2 bg-[#181E2A] hover:bg-[#222B3D] active:scale-95 text-white font-bold text-xs rounded-xl border border-[#222B3D] hover:border-slate-600 transition-all flex items-center gap-2 self-start sm:self-auto cursor-pointer flex-shrink-0"
+                title="Open Folder in Windows File Explorer"
+              >
+                <FolderOpen className="w-4 h-4 text-[#CCFF00]" />
+                <span>{isOpeningFolder ? 'Opening…' : 'Open Folder in Explorer'}</span>
+              </button>
+            </div>
+
+            {backupFolderPath && (
+              <div className="flex items-center gap-2 px-3.5 py-2.5 bg-[#0B0E14] border border-[#222B3D] rounded-xl text-xs font-mono text-slate-300 overflow-x-auto select-all">
+                <span className="text-slate-500 flex-shrink-0 font-bold">📁 Path:</span>
+                <span className="truncate">{backupFolderPath}</span>
+              </div>
+            )}
           </div>
 
           {/* ══════════════════════════════════════════════════════════════════════ */}
@@ -856,11 +892,23 @@ const Settings = () => {
                   <p className="text-xs text-slate-400 mt-1">
                     Automatically dispatch daily encrypted system snapshots to your personal Telegram account.
                   </p>
+                  {telegramConfig.pendingSync && (
+                    <p className="text-xs text-amber-400 mt-1 flex items-center gap-1 font-medium">
+                      <span>⚠️ Internet was offline during last snapshot. The newest backup will automatically sync as soon as connectivity is restored.</span>
+                    </p>
+                  )}
                 </div>
               </div>
 
               {/* Status Badge & Auto-Sync Toggle */}
               <div className="flex items-center gap-3 sm:gap-4 flex-wrap self-start lg:self-center">
+                {telegramConfig.pendingSync && (
+                  <span className="px-3 py-1.5 rounded-full text-xs font-semibold bg-amber-500/10 text-amber-400 border border-amber-500/20 flex items-center gap-1.5 flex-shrink-0 animate-pulse">
+                    <Clock className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Pending Sync</span>
+                  </span>
+                )}
+
                 {telegramConfig.verified ? (
                   <span className="px-3 py-1.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1.5 flex-shrink-0">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400" />
@@ -1000,16 +1048,6 @@ const Settings = () => {
                       )}
                     </button>
                   </div>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
-                    className="py-2.5 px-4 bg-slate-800/40 hover:bg-slate-800/70 border border-slate-700/50 text-slate-300 hover:text-white font-semibold text-xs rounded-xl transition-all flex items-center justify-center gap-2"
-                  >
-                    <Key className="w-4 h-4 text-sky-400" />
-                    <span>Advanced Options</span>
-                    {showAdvancedOptions ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
-                  </button>
                 </div>
               </div>
             ) : (
@@ -1144,71 +1182,6 @@ const Settings = () => {
                     </div>
                   </div>
                 )}
-
-                {/* State A Advanced Options Toggle */}
-                <div className="flex justify-end pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowAdvancedOptions(!showAdvancedOptions)}
-                    className="py-2 px-4 bg-slate-800/40 hover:bg-slate-800/70 border border-slate-700/50 text-slate-300 hover:text-white font-semibold text-xs rounded-xl transition-all flex items-center justify-center gap-2"
-                  >
-                    <Key className="w-4 h-4 text-sky-400" />
-                    <span>Advanced Options (Custom Bot Token)</span>
-                    {showAdvancedOptions ? <ChevronUp className="w-4 h-4 text-slate-400" /> : <ChevronDown className="w-4 h-4 text-slate-400" />}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* Advanced Settings (Collapsible) */}
-            {showAdvancedOptions && (
-              <div className="p-5 bg-[#0B0F17] rounded-xl border border-slate-700/50 space-y-4 animate-in fade-in duration-200">
-                <div className="flex items-center justify-between pb-3 border-b border-[#1E293B]">
-                  <div className="flex items-center gap-2">
-                    <Key className="w-4 h-4 text-sky-400 flex-shrink-0" />
-                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                      Advanced Options (Custom Bot Token)
-                    </h4>
-                  </div>
-                  <span className="text-[10px] text-slate-400">Optional • Default is Official Alpha Gym Bot</span>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-medium text-slate-300 flex items-center justify-between">
-                    <span>Custom Telegram Bot Token</span>
-                    <span className="text-[10px] text-slate-500 font-mono">from @BotFather</span>
-                  </label>
-                  <div className="relative">
-                    <input
-                      type={showBotToken ? 'text' : 'password'}
-                      value={telegramConfig.botToken}
-                      onChange={(e) => setTelegramConfig(prev => ({ ...prev, botToken: e.target.value }))}
-                      placeholder="Leave blank to use official bot, or enter custom token (e.g. 123456789:ABCdef...)"
-                      className="w-full pl-4 pr-10 py-2.5 bg-[#121721] border border-[#222B3D] focus:border-sky-500 rounded-xl text-white text-xs font-mono placeholder:text-slate-600 transition-colors focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowBotToken(!showBotToken)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white transition-colors"
-                    >
-                      {showBotToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1">
-                    <p className="text-[11px] text-slate-400 leading-relaxed">
-                      Leave blank to use the official Alpha Gym Bot (<strong className="text-sky-400">@AlphaSupportingBot</strong>).
-                    </p>
-                    <button
-                      type="button"
-                      onClick={handleSaveTelegramConfig}
-                      disabled={!isOwner || isSavingTelegram}
-                      className="py-1.5 px-3 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-lg transition-colors flex items-center justify-center gap-1.5 self-end sm:self-auto"
-                    >
-                      {isSavingTelegram ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-                      <span>Save Custom Token</span>
-                    </button>
-                  </div>
-                </div>
               </div>
             )}
           </div>

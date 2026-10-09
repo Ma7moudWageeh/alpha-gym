@@ -464,11 +464,265 @@ ipcMain.handle('subscriptions:getHistory', async (event, { client_id }) => {
   }
 });
 
+ipcMain.handle('subscriptions:update', async (event, args = {}) => {
+  try {
+    const {
+      subscriptionId,
+      subscription_id,
+      id,
+      clientId,
+      client_id,
+      package_id,
+      plan_id,
+      planId,
+      price,
+      paidAmount,
+      paid_amount,
+      startDate,
+      start_date,
+      endDate,
+      end_date,
+      note,
+      userRole,
+      role
+    } = (args && typeof args === 'object') ? args : {};
+
+    const subId = subscriptionId || subscription_id || id;
+    if (!subId) {
+      return { success: false, error: 'Subscription ID is required' };
+    }
+
+    const sub = db.prepare('SELECT * FROM subscriptions WHERE id = ?').get(subId);
+    if (!sub) {
+      return { success: false, error: 'Subscription not found' };
+    }
+
+    const targetClientId = clientId || client_id || sub.client_id;
+    const chosenPkgId = package_id || plan_id || planId || sub.package_id;
+
+    // Fetch package details if applicable
+    const pkg = chosenPkgId ? (
+      db.prepare('SELECT * FROM packages WHERE id = ?').get(chosenPkgId) ||
+      db.prepare('SELECT * FROM plans WHERE id = ?').get(chosenPkgId)
+    ) : null;
+
+    const newStartDate = startDate || start_date || sub.start_date;
+    const newEndDate = endDate || end_date || sub.end_date;
+
+    const rawPrice = (price !== undefined && price !== '') ? price : sub.price;
+    const cleanPrice = Math.max(0, Number(parseFloat(rawPrice !== '' && rawPrice !== undefined ? rawPrice : 0).toFixed(2)));
+
+    const rawPaid = (paidAmount !== undefined && paidAmount !== '')
+      ? paidAmount
+      : ((paid_amount !== undefined && paid_amount !== '') ? paid_amount : sub.paid_amount);
+    const cleanPaid = Math.max(0, Number(parseFloat(rawPaid !== '' && rawPaid !== undefined ? rawPaid : 0).toFixed(2)));
+
+    const remainingAmount = Math.max(0, Number((cleanPrice - cleanPaid).toFixed(2)));
+    const today = getLocalDateStr();
+
+    let computedStatus = sub.status;
+    if (sub.status !== 'frozen') {
+      computedStatus = (newEndDate && newEndDate < today) ? 'expired' : 'active';
+    }
+
+    let durationDays = sub.duration_days;
+    if (newStartDate && newEndDate) {
+      try {
+        durationDays = Math.max(1, daysBetween(newStartDate, newEndDate) + 1);
+      } catch (e) {
+        durationDays = pkg?.duration_days || sub.duration_days || 30;
+      }
+    } else if (pkg && pkg.duration_days) {
+      durationDays = pkg.duration_days;
+    }
+
+    const runUpdate = db.transaction(() => {
+      // 1. Update subscription record
+      db.prepare(`
+        UPDATE subscriptions
+        SET package_id = ?,
+            plan_id = ?,
+            start_date = ?,
+            end_date = ?,
+            duration_days = ?,
+            price = ?,
+            paid_amount = ?,
+            remaining_amount = ?,
+            status = ?
+        WHERE id = ?
+      `).run(
+        chosenPkgId,
+        chosenPkgId,
+        newStartDate,
+        newEndDate,
+        durationDays,
+        cleanPrice,
+        cleanPaid,
+        remainingAmount,
+        computedStatus,
+        subId
+      );
+
+      const pkgTitle = pkg ? pkg.title : (sub.package_title || 'Subscription');
+
+      // 2. Update payment record linked to this subscription
+      const payment = db.prepare('SELECT id FROM payments WHERE subscription_id = ? ORDER BY id DESC LIMIT 1').get(subId);
+      if (payment) {
+        db.prepare(`
+          UPDATE payments
+          SET amount = ?,
+              note = COALESCE(?, note)
+          WHERE id = ?
+        `).run(cleanPaid, note || (pkg ? `Subscription: ${pkg.title}` : null), payment.id);
+      } else if (cleanPaid > 0) {
+        db.prepare(`
+          INSERT INTO payments (client_id, subscription_id, amount, type, note)
+          VALUES (?, ?, ?, 'subscription', ?)
+        `).run(targetClientId, subId, cleanPaid, note || `Subscription: ${pkgTitle}`);
+      }
+
+      // 3. Update or adjust corresponding transaction ledger record
+      const tx = db.prepare('SELECT id FROM transactions WHERE subscription_id = ? ORDER BY id DESC LIMIT 1').get(subId);
+      if (tx) {
+        db.prepare(`
+          UPDATE transactions
+          SET amount = ?,
+              notes = COALESCE(?, notes)
+          WHERE id = ?
+        `).run(cleanPaid, note || (pkg ? `Subscription: ${pkg.title}` : null), tx.id);
+      } else {
+        // Fallback: look for matching client transaction or insert
+        const fallbackTx = db.prepare(`
+          SELECT id FROM transactions
+          WHERE client_id = ? AND amount = ?
+          ORDER BY id DESC LIMIT 1
+        `).get(targetClientId, sub.paid_amount);
+
+        if (fallbackTx) {
+          db.prepare(`
+            UPDATE transactions
+            SET amount = ?,
+                subscription_id = ?,
+                notes = COALESCE(?, notes)
+            WHERE id = ?
+          `).run(cleanPaid, subId, note || (pkg ? `Subscription: ${pkg.title}` : null), fallbackTx.id);
+        } else if (cleanPaid > 0) {
+          try {
+            db.prepare(`
+              INSERT INTO transactions (client_id, subscription_id, type, amount, category, date, notes)
+              VALUES (?, ?, 'INCOME', ?, 'MEMBERSHIP', date('now', 'localtime'), ?)
+            `).run(targetClientId, subId, cleanPaid, note || `Subscription: ${pkgTitle}`);
+          } catch (e) {}
+        }
+      }
+
+      // 4. Recalculate athlete's remaining debt
+      const debtAgg = db.prepare(`
+        SELECT COALESCE(SUM(remaining_amount), 0) AS total_debt
+        FROM subscriptions
+        WHERE client_id = ?
+      `).get(targetClientId);
+      const newDebt = debtAgg ? debtAgg.total_debt : 0;
+
+      // 5. Re-evaluate athlete status and active subscription dates
+      const frozenSub = db.prepare(`
+        SELECT * FROM subscriptions 
+        WHERE client_id = ? AND status = 'frozen' 
+        ORDER BY id DESC LIMIT 1
+      `).get(targetClientId);
+
+      if (frozenSub) {
+        db.prepare(`
+          UPDATE clients
+          SET start_date = ?,
+              end_date = ?,
+              status = 'frozen',
+              is_frozen = 1,
+              remaining_debt = ?
+          WHERE id = ?
+        `).run(frozenSub.start_date, frozenSub.end_date, newDebt, targetClientId);
+      } else {
+        const activeSub = db.prepare(`
+          SELECT * FROM subscriptions 
+          WHERE client_id = ? 
+            AND status = 'active' 
+            AND (end_date IS NULL OR DATE(end_date) >= DATE('now', 'localtime'))
+          ORDER BY end_date DESC, id DESC 
+          LIMIT 1
+        `).get(targetClientId);
+
+        if (activeSub) {
+          db.prepare(`
+            UPDATE clients
+            SET start_date = ?,
+                end_date = ?,
+                status = 'active',
+                is_frozen = 0,
+                remaining_debt = ?
+            WHERE id = ?
+          `).run(activeSub.start_date, activeSub.end_date, newDebt, targetClientId);
+        } else {
+          const latestSub = db.prepare(`
+            SELECT * FROM subscriptions 
+            WHERE client_id = ? 
+            ORDER BY end_date DESC, id DESC 
+            LIMIT 1
+          `).get(targetClientId);
+
+          if (latestSub) {
+            const subStatus = (latestSub.end_date && latestSub.end_date < today) ? 'expired' : 'active';
+            db.prepare(`
+              UPDATE clients
+              SET start_date = ?,
+                  end_date = ?,
+                  status = ?,
+                  is_frozen = 0,
+                  remaining_debt = ?
+              WHERE id = ?
+            `).run(latestSub.start_date, latestSub.end_date, subStatus, newDebt, targetClientId);
+          } else {
+            db.prepare(`
+              UPDATE clients
+              SET start_date = NULL,
+                  end_date = NULL,
+                  status = 'active',
+                  is_frozen = 0,
+                  remaining_debt = ?
+              WHERE id = ?
+            `).run(newDebt, targetClientId);
+          }
+        }
+      }
+
+      return true;
+    });
+
+    runUpdate();
+    db.syncAllSubscriptionStatuses(db);
+
+    return {
+      success: true,
+      subscription_id: subId,
+      remaining_amount: remainingAmount
+    };
+  } catch (err) {
+    console.error('[subscriptions:update] Error updating subscription:', err.message);
+    return { success: false, error: err.message };
+  }
+});
+
 ipcMain.handle('subscriptions:delete', async (event, args = {}) => {
   try {
-    const { clientId, client_id, subscriptionId, subscription_id, id } = (args && typeof args === 'object') ? args : {};
+    const { clientId, client_id, subscriptionId, subscription_id, id, userRole, role } = (args && typeof args === 'object') ? args : {};
     const subId = subscriptionId || id || subscription_id;
     if (!subId) return { success: false, error: 'Subscription ID is required' };
+
+    // RBAC Security Gate: Only 'admin' or 'owner' can delete subscriptions.
+    // If role is 'reception' (or anything other than admin/owner), reject immediately.
+    const effectiveRole = userRole || role;
+    if (effectiveRole !== 'owner' && effectiveRole !== 'admin') {
+      return { success: false, error: 'Unauthorized: Only gym owners can delete subscriptions' };
+    }
 
     const runVoid = db.transaction(() => {
       // 1. Fetch subscription details to know what to deduct
@@ -516,27 +770,60 @@ ipcMain.handle('subscriptions:delete', async (event, args = {}) => {
       `).get(targetClientId);
       const newDebt = debtAgg ? debtAgg.total_debt : 0;
 
-      // 5. Rollback client start_date, end_date, and status to the latest remaining subscription (if any)
-      const previousSub = db.prepare(`
+      // 5. Rollback client start_date, end_date, and status to the latest remaining valid subscription (if any)
+      const frozenSub = db.prepare(`
         SELECT * FROM subscriptions 
-        WHERE client_id = ? 
-        ORDER BY end_date DESC, id DESC 
-        LIMIT 1
+        WHERE client_id = ? AND status = 'frozen' 
+        ORDER BY id DESC LIMIT 1
       `).get(targetClientId);
 
-      if (previousSub) {
+      const today = getLocalDateStr();
+      if (frozenSub) {
         db.prepare(`
           UPDATE clients 
-          SET start_date = ?, end_date = ?, status = ?, remaining_debt = ? 
+          SET start_date = ?, end_date = ?, status = 'frozen', is_frozen = 1, remaining_debt = ? 
           WHERE id = ?
-        `).run(previousSub.start_date, previousSub.end_date, previousSub.status || 'active', newDebt, targetClientId);
+        `).run(frozenSub.start_date, frozenSub.end_date, newDebt, targetClientId);
       } else {
-        // No remaining subscriptions -> Set to NO PLAN / INACTIVE
-        db.prepare(`
-          UPDATE clients 
-          SET start_date = NULL, end_date = NULL, status = 'active', remaining_debt = ? 
-          WHERE id = ?
-        `).run(newDebt, targetClientId);
+        const activeSub = db.prepare(`
+          SELECT * FROM subscriptions 
+          WHERE client_id = ? 
+            AND status = 'active' 
+            AND (end_date IS NULL OR DATE(end_date) >= DATE('now', 'localtime'))
+          ORDER BY end_date DESC, id DESC 
+          LIMIT 1
+        `).get(targetClientId);
+
+        if (activeSub) {
+          db.prepare(`
+            UPDATE clients 
+            SET start_date = ?, end_date = ?, status = 'active', is_frozen = 0, remaining_debt = ? 
+            WHERE id = ?
+          `).run(activeSub.start_date, activeSub.end_date, newDebt, targetClientId);
+        } else {
+          const previousSub = db.prepare(`
+            SELECT * FROM subscriptions 
+            WHERE client_id = ? 
+            ORDER BY end_date DESC, id DESC 
+            LIMIT 1
+          `).get(targetClientId);
+
+          if (previousSub) {
+            const prevStatus = (previousSub.end_date && previousSub.end_date < today) ? 'expired' : 'active';
+            db.prepare(`
+              UPDATE clients 
+              SET start_date = ?, end_date = ?, status = ?, is_frozen = 0, remaining_debt = ? 
+              WHERE id = ?
+            `).run(previousSub.start_date, previousSub.end_date, prevStatus, newDebt, targetClientId);
+          } else {
+            // No remaining subscriptions -> Set to NO PLAN / INACTIVE
+            db.prepare(`
+              UPDATE clients 
+              SET start_date = NULL, end_date = NULL, status = 'active', is_frozen = 0, remaining_debt = ? 
+              WHERE id = ?
+            `).run(newDebt, targetClientId);
+          }
+        }
       }
 
       return true;

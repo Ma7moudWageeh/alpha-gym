@@ -12,7 +12,7 @@ const TopNav = () => {
   const [checkInOpen, setCheckInOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [whatsNewOpen, setWhatsNewOpen] = useState(false);
-  const [selectedVersion, setSelectedVersion] = useState('1.0.15');
+  const [selectedVersion, setSelectedVersion] = useState(CHANGELOG_DATA?.[0]?.version || '1.0.16');
 
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateProgress, setUpdateProgress] = useState(null);
@@ -43,8 +43,8 @@ const TopNav = () => {
   }, []);
 
   const latestRelease = CHANGELOG_DATA?.[0] || {
-    version: '1.0.15',
-    title: 'النسخ السحابي الذكي، إدارة الاشتراكات، ولوحة التحكم الديناميكية',
+    version: '1.0.16',
+    title: 'التنقل الذكي وحفظ موضع الشاشة للوحة التحكم وتحسينات الأداء',
     releaseDate: 'أكتوبر 2026'
   };
 

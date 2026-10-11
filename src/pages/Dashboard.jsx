@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useCallback } from 'react';
+import React, { useState, useEffect, useContext, useCallback, useRef } from 'react';
 import { AuthContext } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 import { Users, Clock, MessageSquare, RefreshCw, X, CreditCard, ChevronRight, Printer, Snowflake, Cake, DollarSign } from 'lucide-react';
@@ -7,6 +7,26 @@ import { formatDateDDMMYYYY, getClientEffectiveStatus, calculateDaysRemaining, g
 import DateInput from '../components/DateInput';
 
 import { WhatsAppSingleButton } from '../components/common/WhatsAppButton';
+
+const DASHBOARD_VIEW_STATE_KEY = 'alpha_dashboard_view_state';
+
+function readDashboardViewState() {
+  try {
+    const raw = sessionStorage.getItem(DASHBOARD_VIEW_STATE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) {
+    console.error('Failed to read dashboard view state from sessionStorage:', e);
+  }
+  return null;
+}
+
+function writeDashboardViewState(state) {
+  try {
+    sessionStorage.setItem(DASHBOARD_VIEW_STATE_KEY, JSON.stringify(state));
+  } catch (e) {
+    console.error('Failed to write dashboard view state to sessionStorage:', e);
+  }
+}
 
 const Dashboard = () => {
   const { user } = useContext(AuthContext);
@@ -74,6 +94,61 @@ const Dashboard = () => {
     setLoading(false);
   }, []);
 
+  const scrollRestoredRef = useRef(false);
+
+  const getScrollOffset = () => {
+    const windowTop = window.scrollY || window.pageYOffset || 0;
+    const docTop = document.documentElement ? document.documentElement.scrollTop : 0;
+    const bodyTop = document.body ? document.body.scrollTop : 0;
+    const mainEl = document.querySelector('main');
+    const mainTop = mainEl ? mainEl.scrollTop : 0;
+
+    let containerTop = 0;
+    const scrollContainers = document.querySelectorAll('.overflow-y-auto, [data-scroll-container]');
+    scrollContainers.forEach((el) => {
+      if (el.scrollHeight > el.clientHeight && !el.closest('.card')) {
+        if (el.scrollTop > containerTop) {
+          containerTop = el.scrollTop;
+        }
+      }
+    });
+
+    return Math.max(windowTop, docTop, bodyTop, mainTop, containerTop);
+  };
+
+  const setScrollOffset = (offset) => {
+    if (typeof offset !== 'number' || offset <= 0) return;
+
+    window.scrollTo({ top: offset, behavior: 'instant' });
+    if (document.documentElement) {
+      document.documentElement.scrollTop = offset;
+    }
+    if (document.body) {
+      document.body.scrollTop = offset;
+    }
+
+    const mainEl = document.querySelector('main');
+    if (mainEl) {
+      mainEl.scrollTop = offset;
+    }
+
+    const scrollContainers = document.querySelectorAll('.overflow-y-auto, [data-scroll-container]');
+    scrollContainers.forEach((el) => {
+      if (el.scrollHeight > el.clientHeight && !el.closest('.card')) {
+        el.scrollTop = offset;
+      }
+    });
+  };
+
+  const handleNavigateToClient = (clientId) => {
+    const currentOffset = getScrollOffset();
+    writeDashboardViewState({
+      scrollY: currentOffset,
+      shouldRestoreScroll: true
+    });
+    navigate(`/clients/${clientId}`, { state: { from: '/dashboard' } });
+  };
+
   useEffect(() => {
     fetchDashboardData();
 
@@ -92,6 +167,54 @@ const Dashboard = () => {
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [fetchDashboardData]);
+
+  // Continuously record scroll position so the latest offset is preserved
+  useEffect(() => {
+    const onScroll = () => {
+      const stored = readDashboardViewState();
+      if (stored) {
+        const offset = getScrollOffset();
+        if (offset > 0) {
+          stored.scrollY = offset;
+          writeDashboardViewState(stored);
+        }
+      }
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    const mainEl = document.querySelector('main');
+    if (mainEl) mainEl.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', onScroll);
+      if (mainEl) mainEl.removeEventListener('scroll', onScroll);
+    };
+  }, []);
+
+  // Precise scroll restoration after asynchronous dashboard data render
+  useEffect(() => {
+    if (loading || scrollRestoredRef.current) return;
+
+    const stored = readDashboardViewState();
+    if (stored && stored.shouldRestoreScroll && stored.scrollY > 0) {
+      scrollRestoredRef.current = true;
+      const targetOffset = stored.scrollY;
+
+      const timer = setTimeout(() => {
+        requestAnimationFrame(() => {
+          setScrollOffset(targetOffset);
+
+          // Verification pass after layout settling
+          setTimeout(() => {
+            setScrollOffset(targetOffset);
+          }, 30);
+        });
+      }, 50);
+
+      stored.shouldRestoreScroll = false;
+      writeDashboardViewState(stored);
+
+      return () => clearTimeout(timer);
+    }
+  }, [loading]);
 
   const openRenewModal = (sub) => {
     setRenewClient(sub);
@@ -353,7 +476,7 @@ const Dashboard = () => {
                     return (
                       <tr
                         key={sub.id}
-                        onClick={() => navigate(`/clients/${sub.client_id}`)}
+                        onClick={() => handleNavigateToClient(sub.client_id)}
                         className="cursor-pointer hover:bg-white/5 transition-colors"
                       >
                         <td className="px-5 py-4 font-bold text-white">
@@ -414,7 +537,15 @@ const Dashboard = () => {
 
           <div className="p-4 flex-1 overflow-y-auto space-y-3 bg-[#0B0E14]">
             {recentPayments.map((p) => (
-              <div key={p.id} className="p-4 bg-[#121721] hover:bg-[#181E2A] rounded-xl border border-[#222B3D] flex items-center justify-between text-xs transition-colors">
+              <div
+                key={p.id}
+                onClick={() => {
+                  if (p.client_id) {
+                    handleNavigateToClient(p.client_id);
+                  }
+                }}
+                className={`p-4 bg-[#121721] hover:bg-[#181E2A] rounded-xl border border-[#222B3D] flex items-center justify-between text-xs transition-colors ${p.client_id ? 'cursor-pointer hover:border-[#CCFF00]/40' : ''}`}
+              >
                 <div>
                   <p className="font-bold text-white text-sm uppercase tracking-wide">{p.client_name || 'Walk-in'}</p>
                   <p className="text-slate-400 mt-1 uppercase font-bold text-[10px] tracking-widest">{p.package_title || p.type}</p>

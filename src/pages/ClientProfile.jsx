@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import {
   ArrowLeft, Edit2, Pencil, Trash2, Plus, Printer, Snowflake, Sun,
@@ -692,9 +692,18 @@ const EditSubscriptionModal = ({ subscription, packages, onClose, onSaved }) => 
 const ClientProfile = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useContext(AuthContext);
   const isOwner = user?.role === 'owner';
   const canDeleteSub = user?.role === 'owner' || user?.role === 'admin';
+
+  const handleBack = () => {
+    if (location.state?.from) {
+      navigate(location.state.from);
+    } else {
+      navigate('/clients');
+    }
+  };
 
   const [client, setClient] = useState(null);
   const [packages, setPackages] = useState([]);
@@ -947,8 +956,8 @@ const ClientProfile = () => {
     return (
       <div className="flex flex-col items-center justify-center h-64 space-y-4">
         <p className="text-slate-400">Client not found.</p>
-        <button onClick={() => navigate('/clients')} className="text-[#CCFF00] hover:text-orange-300 flex items-center gap-2">
-          <ArrowLeft className="w-4 h-4" /> Back to Clients
+        <button onClick={handleBack} className="text-[#CCFF00] hover:text-orange-300 flex items-center gap-2">
+          <ArrowLeft className="w-4 h-4" /> Back
         </button>
       </div>
     );
@@ -979,7 +988,7 @@ const ClientProfile = () => {
       {/* ── TOP BAR ── */}
       <div className="flex items-center justify-between flex-wrap gap-4 mt-2 mb-6">
         <button
-          onClick={() => navigate('/clients')}
+          onClick={handleBack}
           className="flex items-center gap-2 text-slate-400 hover:text-[#CCFF00] transition-colors group"
         >
           <ArrowLeft className="w-5 h-5 group-hover:-translate-x-0.5 transition-transform" />
